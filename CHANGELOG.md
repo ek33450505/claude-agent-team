@@ -4,6 +4,46 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+### Fixed
+- **A mid-run message no longer leaves a duplicate `agent_runs` row.** Claude Code fires `SubagentStart` again when a
+  running agent is messaged, but fires one `SubagentStop`, so the start hook left a second `running` row that the
+  reaper later marked `abandoned`. Over the 30 days to 2026-10-14, 125 of 254 abandoned rows duplicated a run that had
+  finished, and `cast doctor` counted them as runs that stopped without a Status. The start hook now skips the insert
+  while the `agent_id` already has a `running` row. If the reaper marks a resumed agent's row `abandoned` before its
+  stop arrives, the stop reopens that agent's latest row only (compare-and-set, `duration_ms` cleared); an older row
+  is never rewritten. A reopened row gets a NULL `duration_ms` and is left out of the slow-agent p95. The reaper's own
+  flip is compare-and-set too, so a row closed between its read and its update stays closed.
+- **Three `cast doctor` false positives.** The `tool_call_failures` line warned on any count; 78% of the 543 rows in
+  the 7 days to 2026-10-14 (as measured that day) were ordinary Bash non-zero exits, so the line is now informational
+  with a bash-exit / other breakdown. The orphaned-session check flagged transcripts that end in a normal `system`
+  `turn_duration` or `away_summary` entry; all 7 live flags were of this kind. The claimed-work verifier wrote
+  hallucination rows for read-only reviewers that list the files they reviewed (50 of the 69 flags `cast doctor`
+  showed on 2026-10-14); it now skips an agent whose installed definition (`~/.claude/agents/<name>.md` only) grants
+  none of Write, Edit, MultiEdit or NotebookEdit, and any `tools:` line it cannot parse strictly falls back to
+  verification. The skip keys on the dispatch name, and a read-only agent that holds Bash can still create files, so
+  those claims go unverified.
+- **Stale memories are re-verified nightly.** The re-verifier existed but nothing ran it, so the stale count only
+  grew. `cast-maintenance.sh` (daily, 03:47) now runs `cast-verify-memories.py --apply`, which bumps `verified_at`
+  only for memories whose every cited path still resolves, and sets a `verified_by: cast-verify-memories.py
+  (refs-resolved)` line in their frontmatter. Because it now runs unattended outside the sandbox: the only git call
+  left is `ls-files` through `cast_git_safe`; the history lookup that classified refs to deleted files as RETIRED is
+  removed (a planted repo config could run a program through `git log`), so those refs report as REF-BROKEN; a path
+  still in the index but deleted from disk no longer counts as resolved, and when a memory's project directory cannot
+  be decoded, a git-tracked match no longer falls back to the current directory's repo; files are read and written
+  byte-exact (strict UTF-8, CRLF and file mode kept, frontmatter with any other line boundary skipped); and a file
+  edited during the run is skipped rather than overwritten (a narrow window between the final re-read and the replace
+  remains).
+- **`/deep-research` runs again.** The Workflow stage-model guard denied it because each stage's model reaches
+  `agent()` through a spread. The three helper calls carry `cast-lint: inherit-model` opt-outs, and the helper now
+  throws when a caller omits `opts.model`; direct `agent()` calls still rely on the stage-model lint.
+
+### Changed
+- **Reviewers put the verdict on its own line.** `code-reviewer` wrote its verdict into the Handoff `status` field
+  (`APPROVE`, `CHANGES_REQUESTED`), which the handoff parser rejects: 13 of 26 protocol violations in the 7 days to
+  2026-10-14. `code-reviewer` and `security` now carry a `Verdict: APPROVE | BLOCKED` line in the Completion Report,
+  directly after `Status:`, and a `BLOCKED` verdict requires `Status: BLOCKED`, because the commit gate reads only the
+  Status line.
+
 ## [10.4.0] — 2026-10-14
 
 ### Removed
