@@ -58,12 +58,13 @@ def _log_error(msg: str) -> None:
 
 
 def get_db_path(cli_db: str = '') -> str:
-    """Resolve cast.db path: --db > CAST_DB_URL(sqlite:///) > CAST_DB_PATH > default."""
+    """Resolve cast.db path: --db > CAST_DB_PATH > default."""
     if cli_db:
         return cli_db
-    url = os.environ.get('CAST_DB_URL', '')
-    if url.startswith('sqlite:///'):
-        return url[len('sqlite:///'):]
+    if os.environ.get('CAST_DB_URL'):
+        raise ValueError(
+            'CAST_DB_URL was retired in v10.4.0; set CAST_DB_PATH to the database file instead.'
+        )
     return os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
 
 

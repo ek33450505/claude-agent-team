@@ -39,37 +39,67 @@ Usage:
 Exit 0 — every live-table writer resolves (also printed to stdout).
 Exit 1 — one or more dangling writers found (listed on stderr) OR the
          contract file itself is missing / not valid JSON.
+
+CAST_REPO_ROOT (optional env): absolute path to the repo to check. Used when this
+script runs as an installed copy (the pre-commit hook passes the repo as data).
+Must be an existing absolute directory, else exit 1. Unset: the root is the
+parent of this script's directory. It sets the default contract
+(<root>/config/producer-contract.json) and where writers resolve.
+A writer path that is absolute, or that resolves (symlinks followed) outside the
+root, is reported as an error and never read.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).parent
-REPO_ROOT = SCRIPT_DIR.parent
-DEFAULT_CONTRACT = REPO_ROOT / "config" / "producer-contract.json"
+
+def get_repo_root() -> Path:
+    """CAST_REPO_ROOT wins (must be an absolute existing dir, else exit 1); else this script's parent's parent."""
+    env_root = os.environ.get("CAST_REPO_ROOT")
+    if env_root is not None:
+        if not os.path.isabs(env_root) or not os.path.isdir(env_root):
+            print(
+                f"ERROR [cast-producer-contract-check]: CAST_REPO_ROOT must be an absolute "
+                f"path to an existing directory: {env_root!r}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return Path(env_root)
+    return Path(__file__).resolve().parent.parent
 
 
-def _resolve(file_part: str) -> Path:
-    """Resolve a writer's file token: bare filename -> scripts/, else repo-root-relative."""
+def _resolve(file_part: str, root: Path) -> Path:
+    """Resolve a writer's file token: bare filename -> <root>/scripts/, else root-relative."""
     if "/" in file_part:
-        return REPO_ROOT / file_part
-    return SCRIPT_DIR / file_part
+        return root / file_part
+    return root / "scripts" / file_part
 
 
 _WRITE_MARKER = re.compile(r"\b(?:INSERT|REPLACE|UPDATE)\b|db_write|_?db_execute", re.IGNORECASE)
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _check_writer(writer: str, table: str = "") -> str | None:
+def _check_writer(writer: str, table: str, root: Path) -> str | None:
     """Return an error message if `writer` is dangling, else None."""
+    if not isinstance(writer, str):
+        return f"writer is not a string: {writer!r}"
     token = writer.split()[0] if writer.split() else writer
     file_part, _, line_part = token.partition(":")
 
-    path = _resolve(file_part)
+    if os.path.isabs(file_part):
+        return f"writer path escapes the repo root: {file_part!r} (writer: {writer!r})"
+    path = _resolve(file_part, root)
+    try:
+        escapes = not path.resolve().is_relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return f"writer path is not resolvable: {file_part!r} (writer: {writer!r})"
+    if escapes:
+        return f"writer path escapes the repo root: {file_part!r} (writer: {writer!r})"
     if not path.is_file():
         return f"file not found: {file_part!r} (writer: {writer!r}, resolved: {path})"
 
@@ -93,7 +123,7 @@ def _check_writer(writer: str, table: str = "") -> str | None:
     return None
 
 
-def check_contract(contract: dict) -> list[str]:
+def check_contract(contract: dict, root: Path) -> list[str]:
     """Return a list of dangling-writer error messages (empty = clean)."""
     errors: list[str] = []
     for entry in contract.get("tables", []):
@@ -101,18 +131,19 @@ def check_contract(contract: dict) -> list[str]:
             continue
         table = entry.get("table", "<unknown>")
         for writer in entry.get("writers", []):
-            err = _check_writer(writer, table)
+            err = _check_writer(writer, table, root)
             if err:
                 errors.append(f"table {table!r}: {err}")
     return errors
 
 
 def main() -> int:
+    root = get_repo_root()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--contract",
         type=Path,
-        default=DEFAULT_CONTRACT,
+        default=root / "config" / "producer-contract.json",
         help="Path to producer-contract.json (default: config/producer-contract.json)",
     )
     args = parser.parse_args()
@@ -128,7 +159,7 @@ def main() -> int:
         print(f"cast-producer-contract-check: invalid JSON in {args.contract}: {e}", file=sys.stderr)
         return 1
 
-    errors = check_contract(contract)
+    errors = check_contract(contract, root)
 
     if errors:
         print(f"cast-producer-contract-check: {len(errors)} dangling live-table writer(s):", file=sys.stderr)

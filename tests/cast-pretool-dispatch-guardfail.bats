@@ -80,9 +80,6 @@ setup() {
     cp "$REPO_DIR/scripts/cast-egress-sentinel.py"  "$TMPSCRIPTS/"
     cp "$REPO_DIR/scripts/cast-redact.py"           "$TMPSCRIPTS/"
 
-    # Mark CAST_DB_URL so cast_db.py in TMPSCRIPTS writes to our temp DB.
-    export CAST_DB_URL="sqlite:///$CAST_DB_PATH"
-
     unset CLAUDE_SUBPROCESS CAST_COMMIT_AGENT CAST_PUSH_OK CAST_STASH_OK \
           CAST_RM_OK CAST_KILL_OK CAST_POLICY_OVERRIDE CAST_RESET_OK \
           CAST_CLEAN_OK CAST_CHECKOUT_OK CAST_RESTORE_OK CAST_BRANCH_OK

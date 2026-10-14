@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CAST database abstraction layer. Reads CAST_DB_URL env var, defaults to ~/.claude/cast.db."""
+"""CAST database abstraction layer. Reads CAST_DB_PATH env var (CAST_DB_URL was retired in v10.4.0 and is refused), defaults to ~/.claude/cast.db."""
 import contextlib
 import os
 import re
@@ -49,7 +49,7 @@ ALLOWED_TABLES = {
     'eval_runs',
 }
 
-# Allowlist for CAST_DB_URL / CAST_DB_PATH resolved paths.
+# Allowlist for CAST_DB_PATH resolved paths.
 # Goal: block traversals into /etc, /usr, /root, other users' homes — while
 # allowing the user's ~/.claude/ and the system temp roots used by BATS / pytest.
 # The prefixes are CONSTANTS plus ~/.claude. They are deliberately NOT derived from
@@ -122,7 +122,7 @@ def _validate_identifier(name: str) -> str:
     return name
 
 
-def validate_db_path(raw: str, label: str = 'CAST_DB_URL/CAST_DB_PATH') -> str:
+def validate_db_path(raw: str, label: str = 'CAST_DB_PATH') -> str:
     """Resolve `raw` and apply the DB allowlist (the ~/.claude positive rule plus the
     constant prefixes). Returns the RESOLVED path; raises ValueError on refusal.
 
@@ -146,11 +146,11 @@ def validate_db_path(raw: str, label: str = 'CAST_DB_URL/CAST_DB_PATH') -> str:
 
 
 def _get_db_path() -> str:
-    url = os.environ.get('CAST_DB_URL', '')
-    if url.startswith('sqlite:///'):
-        raw = url[len('sqlite:///'):]
-    else:
-        raw = str(Path(os.environ.get('CAST_DB_PATH', str(Path.home() / '.claude' / 'cast.db'))))
+    if os.environ.get('CAST_DB_URL'):
+        raise ValueError(
+            'CAST_DB_URL was retired in v10.4.0; set CAST_DB_PATH to the database file instead.'
+        )
+    raw = str(Path(os.environ.get('CAST_DB_PATH', str(Path.home() / '.claude' / 'cast.db'))))
     return validate_db_path(raw)
 
 
@@ -303,7 +303,7 @@ def _sanitize_log_msg(msg) -> str:
 
 
 def _log_error(msg: str) -> None:
-    # NOTE: CAST_DB_PATH / CAST_DB_URL do NOT redirect this log - it always goes to
+    # NOTE: CAST_DB_PATH does NOT redirect this log - it always goes to
     # ~/.claude/logs. A redirect beside the DB was an arbitrary-file-append primitive
     # (hardlinks/symlink races); tests and tools must isolate HOME instead.
     # Never raises (Path.home() is inside the try; the fallback is stderr).

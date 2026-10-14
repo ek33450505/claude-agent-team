@@ -56,7 +56,7 @@
     },
     {
       "table": "routing_events",
-      "writers": ["cast-user-prompt-hook.sh:170", "cast_subagent_stop.py:2509", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
+      "writers": ["cast-user-prompt-hook.sh:169", "cast_subagent_stop.py:2509", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -138,7 +138,7 @@
     },
     {
       "table": "provenance_chain",
-      "writers": ["cast-provenance-chain.py:228"],
+      "writers": ["cast-provenance-chain.py:229"],
       "cadence": "per_event",
       "status": "live"
     },

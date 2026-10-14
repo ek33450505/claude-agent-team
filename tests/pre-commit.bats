@@ -861,3 +861,29 @@ EOF
   [[ ! -f "$RUFF_LOG" ]]
   [[ "$output" != *"should never run"* ]]
 }
+
+# === Lint 12 (self): producer contract ===
+
+_contract_fixture() {  # $1 = writer token
+  mkdir -p config
+  printf '{"tables":[{"table":"t1","status":"live","writers":["%s"]}]}\n' "$1" > config/producer-contract.json
+  stage_plugin_trigger
+}
+
+@test "lint-producer-contract: a live table whose writer is missing blocks the commit" {
+  cd "$TEST_REPO"
+  _contract_fixture "ghost-writer.sh"
+  run bash .githooks/pre-commit
+  assert_failure
+  assert_output --partial "ghost-writer.sh"
+  assert_output --partial "dangling live-table writer"
+}
+
+@test "lint-producer-contract: control - a valid contract (existing writer, no line ref) passes this lint" {
+  cd "$TEST_REPO"
+  _contract_fixture "test-script.sh"
+  run bash .githooks/pre-commit
+  assert_output --partial "cast-producer-contract-check: OK"
+  refute_output --partial "dangling live-table writer"
+  refute_output --partial "ghost-writer.sh"
+}
