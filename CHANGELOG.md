@@ -4,6 +4,32 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+### Removed
+- **`CAST_DB_URL` is retired; `CAST_DB_PATH` is the only way to point CAST at a database.** The variable was only
+  honoured when it held a `sqlite:///<path>` URL (other values were silently ignored), nothing in code or config set
+  it (one doc example did; now removed), and apart from the prompt hook (through `cast_db`, since 10.3.2) the shell
+  writers never read it, so setting it split the record across two databases. `cast_db._get_db_path` now raises
+  `ValueError` ("CAST_DB_URL was retired in v10.4.0; set CAST_DB_PATH to the database file instead.") whenever it is
+  non-empty, even alongside a valid `CAST_DB_PATH`; the never-raise wrappers (`db_write`, `db_query`, `db_execute`)
+  log the refusal and write nothing, and `cast-ask-query` exits 1 with the same message. The ten scripts that carry
+  their own copy of the resolver (`cast-memory-consolidate`, `-embed`, `-dream`, `-dream-review`, `-dream-promote`,
+  `-validate`, `cast-migrate`, `cast-ledger`, `cast-record-review`, `cast-provenance-chain`) refuse it the same way,
+  after any explicit `--db` override (`cast-migrate` has no `--db` flag and always refuses), so a stale value exits 1
+  before any database is opened instead of falling through to the live one (`cast-memory-embed` resolves the path
+  only under `--backfill`). `cast-provenance-chain append` stays non-fatal (it reports the error and exits 0 without
+  writing). The prompt hook skips its `routing_events` row and logs the refusal. The hook validators still run hooks
+  under `env -i` with an allowlist, so the variable never reaches the hooks they test.
+
+### Fixed
+- **The producer-contract check runs in pre-commit, not only in CI.** It pins writer line numbers in
+  `config/producer-contract.json`, so an edit above a writer line passed locally and failed CI (#438). The installed
+  pre-commit hook now runs `cast-producer-contract-check.py` as a blocking self-lint, skipped when a repo has no
+  contract; `CAST_SKIP_SELF_LINTS=1` also skips it. The
+  checker reads the repo from `CAST_REPO_ROOT` when set (it must be an absolute, existing directory, else exit 1),
+  which is how the installed hook passes it. A writer path that is absolute or resolves outside the repo root
+  (including through a symlink) is reported and never read; a non-string or unresolvable writer (for example one
+  containing a NUL byte) is reported instead of crashing the check.
+
 ## [10.3.2] — 2026-10-13
 
 ### Fixed
