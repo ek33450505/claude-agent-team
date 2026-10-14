@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.4.1] — 2026-10-14
+
 ### Fixed
 - **A mid-run message no longer leaves a duplicate `agent_runs` row.** Claude Code fires `SubagentStart` again when a
   running agent is messaged, but fires one `SubagentStop`, so the start hook left a second `running` row that the

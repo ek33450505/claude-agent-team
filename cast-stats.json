@@ -1,6 +1,6 @@
 {
-  "version": "10.4.0",
-  "versionTag": "v10.4.0",
+  "version": "10.4.1",
+  "versionTag": "v10.4.1",
   "agents": 27,
   "tests": 4812,
   "test_files": 261,
