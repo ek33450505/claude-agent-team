@@ -180,3 +180,48 @@ _run_doctor() {
   # Must NOT show a misleading green "none detected" line
   refute_output --partial "orphaned sessions: none detected"
 }
+
+# ── Test 5: normal turn-end system entries are not orphans ───────────────────
+# Claude Code writes system/turn_duration at a normal turn end and
+# system/away_summary on idle. Live (2026-10-14): all 7 flagged transcripts
+# ended with one of these.
+@test "orphaned sessions: trailing system turn_duration / away_summary is not flagged" {
+  _create_minimal_db "$CAST_DB_PATH"
+
+  local proj_dir="$HOME/.claude/projects/proj-sys"
+  mkdir -p "$proj_dir"
+  printf '%s\n' \
+    '{"role":"assistant","content":[{"type":"text","text":"done"}]}' \
+    '{"type":"system","subtype":"turn_duration","durationMs":1234}' \
+    > "$proj_dir/session-turn-duration.jsonl"
+  printf '%s\n' \
+    '{"role":"assistant","content":[{"type":"text","text":"done"}]}' \
+    '{"type":"system","subtype":"away_summary","content":"idle"}' \
+    > "$proj_dir/session-away.jsonl"
+  _backdate_min "$proj_dir/session-turn-duration.jsonl" 120
+  _backdate_min "$proj_dir/session-away.jsonl" 120
+
+  run env CAST_ORPHAN_SESSION_MIN=60 bash "$CAST_BIN" doctor 2>&1
+  refute_output --partial "died mid-tool-loop"
+  assert_output --partial "orphaned sessions: none detected"
+}
+
+# ── Test 6: other trailing system entries and a dangling tool_result still flag ─
+@test "orphaned sessions: other trailing system subtype and tool_result are still flagged" {
+  _create_minimal_db "$CAST_DB_PATH"
+
+  local proj_dir="$HOME/.claude/projects/proj-sys2"
+  mkdir -p "$proj_dir"
+  printf '%s\n' \
+    '{"type":"system","subtype":"bootstrap"}' \
+    > "$proj_dir/session-other-system.jsonl"
+  # turn_duration followed by nothing is clean, but a tool_result LAST must flag
+  _write_dangling_transcript "$proj_dir/session-tool-result.jsonl"
+  _backdate_min "$proj_dir/session-other-system.jsonl" 120
+  _backdate_min "$proj_dir/session-tool-result.jsonl" 120
+
+  run env CAST_ORPHAN_SESSION_MIN=60 bash "$CAST_BIN" doctor 2>&1
+  assert_output --partial "2 transcript(s) died mid-tool-loop"
+  assert_output --partial "session-other-system.jsonl"
+  assert_output --partial "session-tool-result.jsonl"
+}
