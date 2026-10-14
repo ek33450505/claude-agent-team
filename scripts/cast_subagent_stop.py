@@ -758,6 +758,8 @@ class Ctx:
         self.has_agent_identity: bool = False
         # set by stage 0, consumed by stage 2
         self.fast_row_id = None
+        # True when stage 0 reopened a reaped 'abandoned' row (duration spans the reaper gap).
+        self.fast_reopened: bool = False
         # True only for the --gate-only pass: suppresses the hook_failures writes that
         # parse_input and its helpers can make (gate_match error, handback non-regular
         # file) so a failure is recorded ONCE per stop — by the full pass, which
@@ -1088,6 +1090,7 @@ def stage0_fast_write(ctx: Ctx) -> None:
     st = ctx.db_status
 
     fast_row_id = None
+    _reopened = False
     _fast_agent_id = ctx.agent_id
     _fconn = None
     try:
@@ -1103,7 +1106,40 @@ def stage0_fast_write(ctx: Ctx) -> None:
                 (agent, sess or None),
             ).fetchone()
         fast_row_id = _frow[0] if _frow and _frow[0] is not None else None
-        if fast_row_id is not None:
+        if fast_row_id is None and _fast_agent_id:
+            # BOUNDARY: the same agent_id is the same logical agent (Claude Code
+            # issues it; only resumes reuse it). The start hook skips a SubagentStart
+            # while a 'running' row for that agent_id exists, so a resume that began
+            # inside the reaper's window shares the crashed run's row; if
+            # cast-abandon-stale-runs.py then flipped it to 'abandoned' while the run
+            # was alive, no 'running' row is left and the run would have NO row.
+            # Reopen that agent's LATEST row only, and only if it is 'abandoned'
+            # (compare-and-set on status). Reopening any OLDER row is never allowed:
+            # a newer DONE/running row means this stop is a replay or belongs
+            # elsewhere, and we do nothing (HEAD behaviour).
+            # ACCEPTED RESIDUAL: if this run's own start insert failed AND the
+            # agent_id's latest row is a reaped earlier segment, that segment is
+            # closed with this run's data (same logical agent).
+            _lrow = _fconn.execute(
+                "SELECT id, status FROM agent_runs WHERE agent_id=? ORDER BY id DESC LIMIT 1",
+                (_fast_agent_id,),
+            ).fetchone()
+            if _lrow and _lrow[1] == "abandoned":
+                # duration_ms=NULL: started_at..now spans the reaper gap and would
+                # pollute the stage13 slow-agent p95.
+                _cur = _fconn.execute(
+                    "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=NULL "
+                    "WHERE id=? AND status='abandoned'",
+                    (st, ts, _lrow[0]),
+                )
+                if _cur.rowcount == 1:
+                    fast_row_id = _lrow[0]
+                    _reopened = True
+                    # abandoned_at is added lazily by the reaper; clear it only if present.
+                    if "abandoned_at" in {r[1] for r in _fconn.execute("PRAGMA table_info(agent_runs)").fetchall()}:
+                        _fconn.execute("UPDATE agent_runs SET abandoned_at=NULL WHERE id=?", (fast_row_id,))
+                    _fconn.commit()
+        elif fast_row_id is not None:
             _fconn.execute(
                 "UPDATE agent_runs SET status=?, ended_at=? WHERE id=?",
                 (st, ts, fast_row_id),
@@ -1120,6 +1156,7 @@ def stage0_fast_write(ctx: Ctx) -> None:
             log_hook_failure("cast-subagent-stop-hook:agent_runs_fast", -1, str(_fe), sess)
 
     ctx.fast_row_id = fast_row_id
+    ctx.fast_reopened = _reopened
 
 
 # ── Stage 1: event file write ────────────────────────────────────────────────
@@ -1475,6 +1512,8 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                 _cols = {r[1] for r in cur.execute("PRAGMA table_info(agent_runs)").fetchall()}
             except Exception:
                 _cols = set()
+            # Reopened-from-reaped rows (elif branch) must not keep abandoned_at.
+            _abandoned_sql = ", abandoned_at=NULL" if "abandoned_at" in _cols else ""
             if {"spawn_depth", "parent_agent_id"} <= _cols:
                 _lineage_sql = ", spawn_depth=?, parent_agent_id=?"
                 _lineage_params = (spawn_depth, parent_agent_id)
@@ -1497,20 +1536,26 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
                      files_val, file_class_val) + _lineage_params + (fast_row_id,),
                 )
+                if ctx.fast_reopened:
+                    # Reopened reaped row: started_at..now spans the reaper gap.
+                    cur.execute("UPDATE agent_runs SET duration_ms=NULL WHERE id=?", (fast_row_id,))
             elif agent_id:
                 cur.execute(
                     "UPDATE agent_runs SET status=?, ended_at=?, "
-                    "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
+                    "duration_ms=CASE WHEN status='abandoned' THEN NULL ELSE CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER) END, "
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
-                    "files=?, file_class=?" + _lineage_sql + " "
-                    "WHERE id=("
-                    "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?"
+                    "files=?, file_class=?" + _lineage_sql + _abandoned_sql + " "
+                    "WHERE status IN ('running','abandoned') AND id=("
+                    "  SELECT COALESCE("
+                    "    (SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?),"
+                    "    (SELECT id FROM agent_runs WHERE agent_id=? AND status='abandoned'"
+                    "       AND id=(SELECT MAX(id) FROM agent_runs WHERE agent_id=?)))"
                     ")",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val) + _lineage_params + (agent_id,),
+                     files_val, file_class_val) + _lineage_params + (agent_id, agent_id, agent_id),
                 )
             else:
                 cur.execute(
@@ -2458,6 +2503,11 @@ def stage13_duration_p95(ctx: Ctx) -> None:
         conn = sqlite3.connect(ctx.db_path, timeout=5)
         # This run's duration — prefer the row stage 2 enriched, then agent_id, then session.
         duration_ms = None
+        if ctx.fast_reopened:
+            # Reopened reaped row: duration is NULL by design; do not fall back to an
+            # older row's duration for this agent_id and judge THIS run against it.
+            conn.close()
+            return
         if ctx.fast_row_id is not None:
             r = conn.execute(
                 "SELECT duration_ms FROM agent_runs WHERE id=? AND duration_ms IS NOT NULL",

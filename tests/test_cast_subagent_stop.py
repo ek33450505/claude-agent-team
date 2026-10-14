@@ -2273,6 +2273,73 @@ class TestSessionIdNullSafeMatch(_IsolatedDbPathTestCase):
         self.assertIn('"duration_ms": 9999', row[0])
 
 
+class TestReopenReapedRow(_IsolatedDbPathTestCase):
+    """SubagentStop may reopen a reaped 'abandoned' row ONLY when it is the
+    agent_id's LATEST row (compare-and-set on status); a replayed/extra stop
+    must never relabel an older row. Reopened rows get duration_ms NULL and
+    abandoned_at NULL (reaper-gap duration would pollute the p95)."""
+
+    _AGENT_RUNS_SCHEMA = TestSessionIdNullSafeMatch._AGENT_RUNS_SCHEMA
+    _ROUTING_EVENTS_SCHEMA = TestSessionIdNullSafeMatch._ROUTING_EVENTS_SCHEMA
+    _seed_row = TestSessionIdNullSafeMatch._seed_row
+    _row_status = TestSessionIdNullSafeMatch._row_status
+    _make_ctx = TestSessionIdNullSafeMatch._make_ctx
+
+    def _reap(self, row_id, duration_ms=777):
+        conn = sqlite3.connect(os.environ['CAST_DB_PATH'])
+        try:
+            conn.execute(
+                "UPDATE agent_runs SET status='abandoned', abandoned_at='2026-01-01T00:00:00Z', "
+                "ended_at='2026-01-01T00:00:00Z', duration_ms=? WHERE id=?", (duration_ms, row_id))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _cols(self, row_id):
+        conn = sqlite3.connect(os.environ['CAST_DB_PATH'])
+        try:
+            return conn.execute(
+                "SELECT status, duration_ms, abandoned_at FROM agent_runs WHERE id=?", (row_id,)).fetchone()
+        finally:
+            conn.close()
+
+    def test_replayed_stop_does_not_relabel_older_abandoned_row(self):
+        old = self._seed_row('security', 'sess-r', agent_id='aid-r', status='running')
+        self._reap(old)
+        new = self._seed_row('security', 'sess-r', agent_id='aid-r', status='DONE', duration_ms=55)
+        before_new = self._cols(new)
+        for forced_stage0_miss in (False, True):
+            ctx = self._make_ctx('security', 'sess-r', agent_id='aid-r')
+            if not forced_stage0_miss:
+                css.stage0_fast_write(ctx)
+            ctx.fast_row_id = None
+            ctx.response_text = 'Status: DONE'
+            css.stage2_transcript_cost(ctx)
+            self.assertIsNone(ctx.fast_row_id)
+            self.assertEqual(self._row_status(old), 'abandoned', 'older reaped row was relabelled')
+            self.assertEqual(self._cols(new), before_new, 'newer DONE row was modified')
+
+    def test_stage0_reopen_of_latest_abandoned_row_leaves_duration_null(self):
+        rid = self._seed_row('security', 'sess-r', agent_id='aid-r2', status='running')
+        self._reap(rid, duration_ms=777)
+        ctx = self._make_ctx('security', 'sess-r', agent_id='aid-r2')
+        css.stage0_fast_write(ctx)
+        self.assertEqual(ctx.fast_row_id, rid)
+        self.assertTrue(ctx.fast_reopened)
+        ctx.response_text = 'Status: DONE'
+        css.stage2_transcript_cost(ctx)
+        self.assertEqual(self._cols(rid), ('DONE', None, None))
+
+    def test_stage2_elif_path_reopens_latest_abandoned_and_clears_abandoned_at(self):
+        rid = self._seed_row('security', 'sess-r', agent_id='aid-r3', status='running')
+        self._reap(rid, duration_ms=777)
+        ctx = self._make_ctx('security', 'sess-r', agent_id='aid-r3')
+        ctx.fast_row_id = None  # stage 0 failed / did not run
+        ctx.response_text = 'Status: DONE'
+        css.stage2_transcript_cost(ctx)
+        self.assertEqual(self._cols(rid), ('DONE', None, None))
+
+
 class TestStage3DispatchNameMatch(_IsolatedDbPathTestCase):
     """Regression coverage for I-2c unit 2 (stage3_dispatch_decisions'
     two-step match). Before this fix, a dispatch carrying a custom

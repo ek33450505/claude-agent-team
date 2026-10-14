@@ -107,5 +107,54 @@ class RetireTest(unittest.TestCase):
         self.assertGreater(m2.TRANSCRIPT_RETENTION_DAYS, 7)
 
 
+class ReaperCompareAndSetTest(unittest.TestCase):
+    """A row closed (by SubagentStop) between the reaper's SELECT and its flip
+    UPDATE must not be re-flipped to 'abandoned' (flip UPDATE is CAS on status)."""
+
+    def test_row_closed_between_select_and_update_stays_done(self):
+        tmp = tempfile.mkdtemp()
+        db = os.path.join(tmp, 'cast.db')
+        with mock.patch.dict(os.environ, {'HOME': tmp, 'CAST_DB_PATH': db}):
+            spec = importlib.util.spec_from_file_location('reaper_cas', SCRIPT)
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            m.LOG_PATH = os.path.join(tmp, 'log')
+            setup = sqlite3.connect(db)
+            setup.execute('''CREATE TABLE agent_runs (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent TEXT, started_at TEXT, ended_at TEXT, status TEXT, agent_id TEXT,
+                session_id TEXT, response TEXT, abandoned_at TIMESTAMP)''')
+            setup.execute("INSERT INTO agent_runs (agent,started_at,status,agent_id) VALUES ('bot',?,'running','aid-cas')",
+                          (iso(hours=5),))
+            setup.commit()
+            setup.close()
+
+            real_connect = sqlite3.connect
+
+            def racing_connect(*a, **kw):
+                conn = real_connect(*a, **kw)
+                fired = []
+
+                def trace(stmt):
+                    # The reaper's flip UPDATE is about to run: SubagentStop wins the race.
+                    if 'SET status = \'abandoned\'' in stmt and not fired:
+                        fired.append(1)
+                        other = real_connect(db, timeout=5)
+                        other.execute("UPDATE agent_runs SET status='DONE' WHERE agent_id='aid-cas'")
+                        other.commit()
+                        other.close()
+                conn.set_trace_callback(trace)
+                return conn
+
+            with mock.patch.object(m.sqlite3, 'connect', racing_connect):
+                try:
+                    m.main()
+                except SystemExit:
+                    pass
+            chk = real_connect(db)
+            status = chk.execute("SELECT status FROM agent_runs WHERE agent_id='aid-cas'").fetchone()[0]
+            chk.close()
+        self.assertEqual(status, 'DONE', 'reaper re-flipped a row that SubagentStop had already closed')
+
+
 if __name__ == '__main__':
     unittest.main()
