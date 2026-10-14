@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.3.2] — 2026-10-13
+
 ### Fixed
 - **The prompt hook resolves its DB through `cast_db`, like the Python writers (`scripts/cast-user-prompt-hook.sh`).**
   It read `CAST_DB_PATH` only, so with `CAST_DB_URL` set its `routing_events` rows went to a different database. When
