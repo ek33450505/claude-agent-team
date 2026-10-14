@@ -426,3 +426,60 @@ EOF
   assert_output --partial "daemon check skipped"
   assert_output --partial "--"
 }
+
+# ---------------------------------------------------------------------------
+# Snapshot pillar: new install (no snapshot, young cast.db) -> INFO, else WARN
+# Mirrors cast doctor check 18 (shared _cast_db_age_hours). Age = the older of
+# file birth time / the schema_migrations applied_at row; touch cannot set birth
+# time on macOS, so the applied_at row alone drives the fixtures' age.
+# ---------------------------------------------------------------------------
+_make_db_with_migration() {
+  # $1 = applied_at ISO string
+  mkdir -p "${HOME}/.claude"
+  python3 -I -c 'import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+c.execute("CREATE TABLE schema_migrations (version TEXT, applied_at TEXT)")
+c.execute("INSERT INTO schema_migrations VALUES (?,?)", ("1", sys.argv[2]))
+c.commit(); c.close()' "${HOME}/.claude/cast.db" "$1"
+}
+
+@test "snapshot pillar: no snapshot + fresh cast.db -> INFO, not WARN" {
+  _make_db_with_migration "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
+  _run_integrity_neutral
+  assert_success
+  assert_output --partial "no snapshot yet (new install"
+  refute_output --partial "Snapshot: no snapshot found"
+}
+
+@test "snapshot pillar: no snapshot + old cast.db -> WARN" {
+  _make_db_with_migration "2020-01-01T00:00:00+00:00"
+  _run_integrity_neutral
+  assert_success
+  assert_output --partial "Snapshot: no snapshot found in"
+  refute_output --partial "no snapshot yet (new install"
+}
+
+@test "snapshot pillar: no snapshot + missing cast.db -> WARN (fail toward warning)" {
+  rm -f "${HOME}/.claude/cast.db"
+  _run_integrity_neutral
+  assert_success
+  assert_output --partial "Snapshot: no snapshot found in"
+}
+
+@test "snapshot pillar: CAST_BACKUP_MAX_AGE_HOURS=0 + fresh cast.db -> WARN (no INFO)" {
+  _make_db_with_migration "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
+  export CAST_BACKUP_MAX_AGE_HOURS=0
+  _run_integrity_neutral
+  assert_success
+  assert_output --partial "Snapshot: no snapshot found in"
+  refute_output --partial "no snapshot yet (new install"
+}
+
+@test "snapshot pillar: CAST_BACKUP_MAX_AGE_HOURS=abc falls back to 48 -> INFO on fresh cast.db" {
+  _make_db_with_migration "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
+  export CAST_BACKUP_MAX_AGE_HOURS=abc
+  _run_integrity_neutral
+  assert_success
+  assert_output --partial "no snapshot yet (new install"
+  refute_output --partial "Snapshot: no snapshot found"
+}
