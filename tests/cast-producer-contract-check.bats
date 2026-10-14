@@ -103,8 +103,12 @@ JSON
 
 _plant_line_fixture() {
   # $1 = table name in contract, $2 = writer suffix (":N" or ":func (desc)")
-  FIXTURE="$BATS_TEST_TMPDIR/fixture-writer.sh"
-  cat > "$FIXTURE" <<'SH'
+  # Writers resolve under a fake root (absolute writer paths are refused by containment).
+  export CAST_REPO_ROOT="$BATS_TEST_TMPDIR/fx-root"
+  mkdir -p "$CAST_REPO_ROOT/scripts"
+  FIXTURE="fixture-writer.sh"
+  FIXTURE_PATH="$CAST_REPO_ROOT/scripts/$FIXTURE"
+  cat > "$FIXTURE_PATH" <<'SH'
 #!/usr/bin/env bash
 # a comment line that says nothing useful
 echo "INSERT INTO agent_runs_daily (day) VALUES ('x')"
@@ -149,8 +153,12 @@ JSON
 
 _plant_ident_fixture() {
   # $1 = writer suffix (e.g. ":some_fn")
-  FIXTURE="$BATS_TEST_TMPDIR/ident-writer.sh"
-  cat > "$FIXTURE" <<'SH'
+  # Writers resolve under a fake root (absolute writer paths are refused by containment).
+  export CAST_REPO_ROOT="$BATS_TEST_TMPDIR/fx-root"
+  mkdir -p "$CAST_REPO_ROOT/scripts"
+  FIXTURE="ident-writer.sh"
+  FIXTURE_PATH="$CAST_REPO_ROOT/scripts/$FIXTURE"
+  cat > "$FIXTURE_PATH" <<'SH'
 #!/usr/bin/env bash
 # only_in_comment is mentioned here but never used
 real_fn() { echo hi; }
@@ -189,4 +197,102 @@ JSON
   run python3 "$CHECK_SCRIPT" --contract "$PLANTED"
   [ "$status" -eq 1 ]
   [[ "$output" == *"does not write agent_runs"* ]]
+}
+
+# --- CAST_REPO_ROOT (installed-copy mode: the pre-commit hook passes the repo as data) ---
+
+# Copy the checker OUTSIDE the repo, as the installed copy would be.
+_outside_copy() {
+  OUTSIDE_DIR="$(mktemp -d "$BATS_TEST_TMPDIR/outside.XXXXXX")"
+  cp "$CHECK_SCRIPT" "$OUTSIDE_DIR/cast-producer-contract-check.py"
+  OUTSIDE_CHECK="$OUTSIDE_DIR/cast-producer-contract-check.py"
+}
+
+@test "CAST_REPO_ROOT: out-of-repo copy validates the repo named by the env var" {
+  _outside_copy
+  run env CAST_REPO_ROOT="$REPO_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -I "$OUTSIDE_CHECK"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK"* ]]
+}
+
+@test "CAST_REPO_ROOT control: the same out-of-repo copy WITHOUT the env var fails" {
+  _outside_copy
+  run env -u CAST_REPO_ROOT PYTHONDONTWRITEBYTECODE=1 python3 -I "$OUTSIDE_CHECK"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"contract not found"* ]]
+}
+
+@test "CAST_REPO_ROOT: relative path is refused (fail closed)" {
+  run env CAST_REPO_ROOT=relative/path PYTHONDONTWRITEBYTECODE=1 python3 "$CHECK_SCRIPT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CAST_REPO_ROOT must be an absolute path to an existing directory"* ]]
+}
+
+@test "CAST_REPO_ROOT: nonexistent absolute directory is refused" {
+  run env CAST_REPO_ROOT="$BATS_TEST_TMPDIR/does-not-exist" PYTHONDONTWRITEBYTECODE=1 python3 "$CHECK_SCRIPT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CAST_REPO_ROOT must be an absolute path"* ]]
+}
+
+_fake_root() {  # $1 = writer JSON literal; sets FAKE_ROOT
+  FAKE_ROOT="$(mktemp -d "$BATS_TEST_TMPDIR/fakeroot.XXXXXX")"
+  mkdir -p "$FAKE_ROOT/config" "$FAKE_ROOT/scripts"
+  printf '{"tables":[{"table":"t1","status":"live","writers":[%s]}]}\n' "$1" > "$FAKE_ROOT/config/producer-contract.json"
+}
+
+@test "CAST_REPO_ROOT: bare writer is NOT found at the root, only under scripts/" {
+  _fake_root '"tool.sh"'
+  echo "x" > "$FAKE_ROOT/tool.sh"
+  run env CAST_REPO_ROOT="$FAKE_ROOT" PYTHONDONTWRITEBYTECODE=1 python3 "$CHECK_SCRIPT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"file not found"* ]]
+}
+
+@test "CAST_REPO_ROOT: bare writer present under the env root's scripts/ passes" {
+  _fake_root '"ok.sh"'
+  echo "x" > "$FAKE_ROOT/scripts/ok.sh"
+  run env CAST_REPO_ROOT="$FAKE_ROOT" PYTHONDONTWRITEBYTECODE=1 python3 "$CHECK_SCRIPT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK"* ]]
+}
+
+@test "containment: absolute writer path is refused and not read" {
+  _fake_root '"/etc/hosts:1"'
+  run env CAST_REPO_ROOT="$FAKE_ROOT" PYTHONDONTWRITEBYTECODE=1 python3 "$CHECK_SCRIPT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"writer path escapes the repo root"* ]]
+  [[ "$output" != *"localhost"* ]]
+}
+
+@test "containment: ../ escape is refused" {
+  _fake_root '"../outside.sh"'
+  echo "x" > "$BATS_TEST_TMPDIR/outside.sh"
+  run env CAST_REPO_ROOT="$FAKE_ROOT" PYTHONDONTWRITEBYTECODE=1 python3 "$CHECK_SCRIPT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"writer path escapes the repo root"* ]]
+}
+
+@test "containment: symlink under scripts/ pointing outside the root is refused" {
+  _fake_root '"link.sh"'
+  echo "x" > "$BATS_TEST_TMPDIR/target.sh"
+  ln -s "$BATS_TEST_TMPDIR/target.sh" "$FAKE_ROOT/scripts/link.sh"
+  run env CAST_REPO_ROOT="$FAKE_ROOT" PYTHONDONTWRITEBYTECODE=1 python3 "$CHECK_SCRIPT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"writer path escapes the repo root"* ]]
+}
+
+@test "non-string writer entry is reported as an error, no traceback" {
+  _fake_root '5'
+  run env CAST_REPO_ROOT="$FAKE_ROOT" PYTHONDONTWRITEBYTECODE=1 python3 "$CHECK_SCRIPT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"writer is not a string"* ]]
+  [[ "$output" != *"Traceback"* ]]
+}
+
+@test "containment: writer with an embedded NUL byte is an error entry, not a crash" {
+  _fake_root '"a\u0000b.py:1"'
+  run env CAST_REPO_ROOT="$FAKE_ROOT" PYTHONDONTWRITEBYTECODE=1 python3 "$CHECK_SCRIPT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not resolvable"* ]]
+  [[ "$output" != *"Traceback"* ]]
 }
