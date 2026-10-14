@@ -959,7 +959,7 @@ if [ -f "$CAST_BIN_SRC" ]; then
     fi
     unset _cast_src_ephemeral
     case ":$PATH:" in
-        *":$LOCAL_BIN:"*) ;;
+        *":$LOCAL_BIN:"* | *":$LOCAL_BIN/:"*) ;;
         *) warn "  Note: $LOCAL_BIN is not in your PATH" ;;
     esac
 fi
@@ -1181,9 +1181,16 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         # collector back to dormant. Fresh / non-maintainer installs have no prior plist (or
         # RunAtLoad=false) so they stay dormant — telemetry is opt-in OFF by default (§4.1).
         _otel_was_enabled=false
-        if [ -f "$PLIST_DEST" ] && /usr/libexec/PlistBuddy -c "Print :RunAtLoad" "$PLIST_DEST" 2>/dev/null | grep -q "true"; then
+        # Capture first, compare after: `PlistBuddy | grep -q` under pipefail can SIGPIPE PlistBuddy
+        # when grep exits on the first match, flipping the condition false.
+        _otel_ral=""
+        if [ -f "$PLIST_DEST" ]; then
+            _otel_ral="$(/usr/libexec/PlistBuddy -c "Print :RunAtLoad" "$PLIST_DEST" 2>/dev/null || true)"
+        fi
+        if [ "$_otel_ral" = "true" ]; then
             _otel_was_enabled=true
         fi
+        unset _otel_ral
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-otel-collector.plist" > "$PLIST_DEST"
         if [ "$_otel_was_enabled" = "true" ]; then
             /usr/libexec/PlistBuddy -c "Set :RunAtLoad true" "$PLIST_DEST" 2>/dev/null || true
@@ -1386,19 +1393,31 @@ fi
 # `set -o pipefail` fails when grep exits on an early match and printf takes EPIPE (false UNMANAGED).
 _mf_list=$'\n'"$(printf '%s\n' "${_mf_files[@]}")"$'\n'
 for _mf_dir in scripts scripts/migrations; do
-    while IFS= read -r _mf_u; do
+    # NUL-delimited so a filename containing a newline is one entry, not bogus split names.
+    # find -H follows a symlinked scan root (as ls -A did) but not the entries inside it.
+    # find on a missing dir errors to /dev/null; `|| true` keeps set -e/pipefail quiet inside <(...).
+    while IFS= read -r -d '' _mf_p; do
+        _mf_u="${_mf_p##*/}"
         case "$_mf_u" in .DS_Store|__pycache__) continue ;; esac
         [ "$_mf_dir/$_mf_u" = "scripts/migrations" ] && continue
+        # A name containing a newline can never be a managed name (and would defeat the
+        # newline-delimited membership match below), so it always warns.
+        case "$_mf_u" in
+            *$'\n'*)
+                warn "  UNMANAGED file in ~/.claude/$_mf_dir: $(_cast_clean "$_mf_u") — not deployed by this install; remove it (the health hook and cast doctor will alarm on it)"
+                continue
+                ;;
+        esac
         case "$_mf_list" in
             *$'\n'"$_mf_dir/$_mf_u"$'\n'*) ;;
             *)
                 warn "  UNMANAGED file in ~/.claude/$_mf_dir: $(_cast_clean "$_mf_u") — not deployed by this install; remove it (the health hook and cast doctor will alarm on it)"
                 ;;
         esac
-    done < <(ls -A "$CLAUDE_DIR/$_mf_dir" 2>/dev/null)
+    done < <(find -H "$CLAUDE_DIR/$_mf_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
 done
 success "  Integrity manifest: $_mf_dest (${#_mf_files[@]} files)"
-unset _mf_stat _mf_modes _mf_dir _mf_u _mf_dest _mf_sha _mf_files _mf_src _mf_base _mf_rel _mf_tmp _mf_hp _mf_sorted_arr _mf_line _mf_out _mf_list
+unset _mf_stat _mf_modes _mf_dir _mf_u _mf_p _mf_dest _mf_sha _mf_files _mf_src _mf_base _mf_rel _mf_tmp _mf_hp _mf_sorted_arr _mf_line _mf_out _mf_list
 
 # --- Update README stats ---
 bash "$SCRIPT_DIR/scripts/gen-stats.sh" 2>/dev/null || true
