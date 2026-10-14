@@ -56,6 +56,9 @@ _make_retired_repo() {
 }
 
 setup() {
+    # Git exports these to hooks, so a run from pre-push (CAST_RUN_BATS_PUSH=1) may inherit them:
+    # left set, every fixture's git init/add/config/commit would hit the OUTER repo's index and config.
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
     setup_temp_home
     export CAST_MEMORIES_BASE_DIR="$HOME/.cast-test-memories"
     mkdir -p "$CAST_MEMORIES_BASE_DIR"
@@ -474,14 +477,21 @@ EOF
 # ──────────────────────────────────────────────────────────────────────────────
 # Test 15: a bare ref with no direct root hit resolves via the LAST-RESORT
 # project-git-suffix fallback (git -C <project_root> ls-files, path-suffix
-# match) — "run.sh" isn't at repo root or repo/scripts/, only at
-# tests/run.sh, so this can ONLY pass via the new fallback.
+# match) — in the fixture repo "run.sh" exists ONLY at tests/run.sh (not at
+# its root or scripts/), so this can ONLY pass via the fallback.
 # ──────────────────────────────────────────────────────────────────────────────
 @test "bare ref resolves via the project-git-suffix fallback (unique match)" {
-    # The memory dir must DECODE to the repo (the cwd fallback no longer exists):
-    # encode REPO_DIR the way Claude Code does ('/', '_' and '.' all become '-').
-    local encoded
-    encoded=$(printf '%s' "$REPO_DIR" | tr '/_.' '---')
+    # The memory dir must DECODE to a git repo (the cwd fallback no longer
+    # exists). Use a fixture repo under the temp HOME, not REPO_DIR: a CI
+    # checkout (/home/runner/work/<repo>/<repo>) has a hyphen in a NON-final
+    # component, which the bounded trailing-only decoder can't recover.
+    # Encode only the component we add, as tests 17/18 do.
+    local real_dir="$HOME/gitsuffixproj"
+    mkdir -p "$real_dir/tests"
+    touch "$real_dir/tests/run.sh"
+    git -C "$real_dir" init -q
+    git -C "$real_dir" add tests/run.sh
+    local encoded="${HOME//\//-}-gitsuffixproj"
     local proj_dir="$CAST_MEMORIES_BASE_DIR/$encoded/memory"
     mkdir -p "$proj_dir"
 
