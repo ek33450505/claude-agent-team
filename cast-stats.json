@@ -2,7 +2,7 @@
   "version": "10.4.0",
   "versionTag": "v10.4.0",
   "agents": 27,
-  "tests": 4812,
+  "tests": 4814,
   "test_files": 261,
   "tables": 43,
   "commands": 21,
