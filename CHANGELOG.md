@@ -4,6 +4,33 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.3.2] — 2026-10-13
+
+### Fixed
+- **The prompt hook resolves its DB through `cast_db`, like the Python writers (`scripts/cast-user-prompt-hook.sh`).**
+  It read `CAST_DB_PATH` only, so with `CAST_DB_URL` set its `routing_events` rows went to a different database. When
+  either variable is present it now calls `cast_db` (a `sqlite:///` `CAST_DB_URL` wins over `CAST_DB_PATH`, always
+  validated). An empty `CAST_DB_PATH` is no longer treated as unset: it resolves to the working directory, which the
+  allowlist normally refuses, so the row is skipped rather than written to the default DB. A refusal logs the variable
+  name and the exception class, never the path or the prompt. The shell writers still read only `CAST_DB_PATH`.
+- **`cast integrity` reports a new install's missing snapshot as INFO, like `cast doctor`**, and counts it as INFO, not
+  WARN, in its summary line. The cast.db age logic moved unchanged into one helper, `_cast_db_age_hours`, which both
+  commands use.
+- **install.sh: three Lows from the v10.3 security review.** RunAtLoad detection no longer pipes PlistBuddy into
+  `grep -q` under pipefail (a SIGPIPE could flip it); it compares the captured value to `true` exactly (no test: the
+  PlistBuddy path has no seam). The PATH note no longer fires when `PATH` holds `~/.local/bin/` with a trailing slash.
+  The UNMANAGED-file scan reads `find -H … -print0` with a NUL read, so a newline in a filename no longer splits into
+  bogus names, and such a name always warns.
+- **Test isolation (`tests/helpers/setup.bash`).** `setup_temp_home` clears an inherited `CAST_DB_PATH` and
+  `CAST_DB_URL`, so a value from the calling shell does not reach hooks under test (a test that sets one explicitly
+  still uses it). `teardown_temp_home` strips trailing slashes once, requires both the raw and the resolved path to be
+  under a temp root, compares the real home in both forms, and refuses a HOME that is a symlink, so the path it deletes
+  is the path it checked.
+
+### Changed
+- `rules-core/working-conventions.md`: commit dispatches are described as pre-staged by the dispatching session, which
+  pins the staged diff with `git diff --cached | shasum -a 256`; the commit agent stages nothing and stops on a mismatch.
+
 ## [10.3.1] — 2026-10-13
 
 ### Fixed

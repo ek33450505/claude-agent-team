@@ -263,6 +263,15 @@ EOF
   [ "$(cat "$FIX/VERSION")" = "$OLD" ]
 }
 
+@test "abort when Unreleased holds only an unterminated comment" {
+  printf '# Changelog\n\n## [Unreleased]\n\n<!-- never closed\n\n## [1.2.3] — 2026-01-01\n\n- real older content\n' >"$FIX/CHANGELOG.md"
+  recommit
+  run prepare patch
+  assert_failure
+  assert_output --partial "section has no content"
+  [ "$(cat "$FIX/VERSION")" = "$OLD" ]
+}
+
 @test "Unreleased with a heading plus a real bullet is accepted" {
   printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- real\n\n## [1.2.3] — 2026-01-01\n\n- x\n' >"$FIX/CHANGELOG.md"
   recommit
@@ -495,6 +504,9 @@ install_curl_shim() {
   cat >"$BATS_TEST_TMPDIR/shim/curl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s ' "$@" >"${SHIM_ARGV:-/dev/null}"
+if [[ -n "${SHIM_TMPLOG:-}" ]]; then
+  ls "$TMPDIR" >>"$SHIM_TMPLOG"
+fi
 out=""
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == "-o" ]]; then
@@ -569,6 +581,21 @@ tap_setup_ok() {
   mkdir -p "$TMPDIR"
   run run_tap "$TAP_VER"
   assert_success
+  [ -z "$(ls -A "$TMPDIR")" ]
+}
+
+@test "tap creates its three temp files under TMPDIR during the run" {
+  tap_setup_ok
+  export TMPDIR="$BATS_TEST_TMPDIR/rel-tmp"
+  mkdir -p "$TMPDIR"
+  export SHIM_TMPLOG="$BATS_TEST_TMPDIR/tmp-listing"
+  : >"$SHIM_TMPLOG"
+  run run_tap "$TAP_VER"
+  assert_success
+  # Observed mid-run by the curl shim, so a mktemp that ignored TMPDIR fails here.
+  grep -Eq '^cast-release\.[A-Za-z0-9]+$' "$SHIM_TMPLOG"
+  grep -Eq '^cast-release-list\.[A-Za-z0-9]+$' "$SHIM_TMPLOG"
+  grep -Eq '^cast-release-unz\.[A-Za-z0-9]+$' "$SHIM_TMPLOG"
   [ -z "$(ls -A "$TMPDIR")" ]
 }
 

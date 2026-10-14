@@ -7,10 +7,31 @@ setup_temp_home() {
   # Sentinel: teardown_temp_home will refuse to delete any HOME that lacks this marker
   touch "$HOME/.cast-test-home"
   export TEST_INSTALL_DIR="$HOME/.claude"
+  # An ambient DB override would point hooks under test at the live cast.db
+  unset CAST_DB_PATH CAST_DB_URL
+}
+
+# 0 if the path is under a known temp root (glob semantics: needs a component
+# below the root); non-zero otherwise, including for the empty string.
+_cast_temp_prefix_ok() {
+  case "${1:-}" in
+    /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*) return 0 ;;
+  esac
+  return 1
 }
 
 teardown_temp_home() {
   local target="$HOME"
+  # Strip ALL trailing slashes once: every guard and the final rm must see the
+  # same string (a trailing slash makes a symlink operand resolve to its target)
+  target="${target%"${target##*[!/]}"}"
+
+  # Guard (0): an empty (or all-slash) HOME is never a deletable fixture
+  if [[ -z "$target" ]]; then
+    echo "FATAL [teardown_temp_home]: refusing to delete '$HOME' — empty path after normalisation" >&2
+    export HOME="$ORIG_HOME"
+    return 1
+  fi
 
   # Guard (a): sentinel marker must exist
   if [[ ! -f "$target/.cast-test-home" ]]; then
@@ -19,28 +40,37 @@ teardown_temp_home() {
     return 1
   fi
 
-  # Guard (b): path must begin with a known temp prefix
-  local is_tmp=0
-  case "$target" in
-    /tmp/*)                  is_tmp=1 ;;
-    /private/tmp/*)          is_tmp=1 ;;
-    /var/folders/*)          is_tmp=1 ;;
-    /private/var/folders/*)  is_tmp=1 ;;
-  esac
-  if [[ "$is_tmp" -eq 0 ]]; then
+  # Canonicalise (physical path, symlinks resolved) before the path-based guards
+  local _t_real _r_real
+  _t_real="$(CDPATH='' cd -P -- "$target" 2>/dev/null && pwd -P)" || _t_real=""
+  _r_real=""
+  if [[ -n "${ORIG_HOME:-}" ]]; then
+    _r_real="$(CDPATH='' cd -P -- "$ORIG_HOME" 2>/dev/null && pwd -P)" || _r_real=""
+  fi
+
+  # Guard (b): BOTH the raw and the resolved path must begin with a known temp
+  # prefix (widen, never narrow); an unresolvable path is refused
+  if [[ -z "$_t_real" ]] || ! _cast_temp_prefix_ok "$target" || ! _cast_temp_prefix_ok "$_t_real"; then
     echo "FATAL [teardown_temp_home]: refusing to delete '$target' — not a verified test fixture (not under /tmp, /private/tmp, or /var/folders)" >&2
     export HOME="$ORIG_HOME"
     return 1
   fi
 
-  # Guard (c): must not equal the invoking user's real home
+  # Guard (c): must not equal the invoking user's real home (raw OR resolved)
   local real_home="${ORIG_HOME:-}"
-  # Fallback: reject anything that looks like /Users/<name> without a temp suffix
-  if [[ -n "$real_home" && "$target" = "$real_home" ]]; then
+  if [[ -n "$real_home" && ( "$target" = "$real_home" || ( -n "$_r_real" && "$_t_real" = "$_r_real" ) ) ]]; then
     echo "FATAL [teardown_temp_home]: refusing to delete '$target' — matches ORIG_HOME (real user home)" >&2
     export HOME="$ORIG_HOME"
     return 1
   fi
+  # Guard (d): HOME itself must not be a symlink, so the operand rm -rf deletes
+  # is the operand that was validated (setup_temp_home always makes a real dir)
+  if [[ -L "$target" ]]; then
+    echo "FATAL [teardown_temp_home]: refusing to delete '$target' — HOME is a symlink (deleted operand must equal the validated one)" >&2
+    export HOME="$ORIG_HOME"
+    return 1
+  fi
+  # Fallback: reject anything that looks like /Users/<name> without a temp suffix
   if [[ -z "$real_home" ]]; then
     case "$target" in
       /Users/*)

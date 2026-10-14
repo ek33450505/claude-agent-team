@@ -131,19 +131,21 @@ now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # Log to cast.db routing_events
-# CAST_DB_PATH override (project convention), validated through cast_db.validate_db_path so
-# a refused path is not written. python -I drops the script dir from sys.path, so load
+# When CAST_DB_URL or CAST_DB_PATH is present, resolve the DB through cast_db._get_db_path
+# (sqlite:/// URL first, then PATH, always validated); a refusal skips the row. python -I drops the script dir from sys.path, so load
 # cast_db.py by file path next to cast-redact.py. Any failure to validate -> skip the write.
 db_path = os.path.expanduser("~/.claude/cast.db")
-_env_db = os.environ.get("CAST_DB_PATH", "")
-if _env_db:
+_env_url = os.environ.get("CAST_DB_URL", "")
+# Same precedence as cast_db._get_db_path: a sqlite:/// CAST_DB_URL wins over CAST_DB_PATH.
+_db_var = "CAST_DB_URL" if _env_url.startswith("sqlite:///") else "CAST_DB_PATH"
+if "CAST_DB_URL" in os.environ or "CAST_DB_PATH" in os.environ:
     try:
         import importlib.util as _ilu
         _cdb_file = os.path.join(os.path.dirname(_redact_script), "cast_db.py")
         _spec = _ilu.spec_from_file_location("cast_db", _cdb_file)
         _cdb = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_cdb)
-        db_path = _cdb.validate_db_path(_env_db, "CAST_DB_PATH")
+        db_path = _cdb._get_db_path()
     except Exception as _e:
         # Refused path / unloadable validator: skip the row but leave a trace. Log the
         # exception CLASS only (never the raw path or prompt text). Must never crash the hook.
@@ -153,7 +155,7 @@ if _env_db:
             os.makedirs(os.path.dirname(_err_log2), exist_ok=True)
             _ts2 = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             with open(_err_log2, 'a') as _f2:
-                _f2.write(f"[{_ts2}] ERROR cast-user-prompt-hook.sh: CAST_DB_PATH refused — routing_events row skipped ({type(_e).__name__})\n")
+                _f2.write(f"[{_ts2}] ERROR cast-user-prompt-hook.sh: {_db_var} refused — routing_events row skipped ({type(_e).__name__})\n")
         except Exception:
             pass
 prompt_preview_db = prompt_preview[:80]
@@ -161,7 +163,7 @@ project = os.path.basename(os.getcwd().rstrip('/')) or "unknown"
 data_json = json.dumps({"prompt_length": prompt_length, "prompt_preview": prompt_preview})
 try:
     if db_path is None:
-        raise ValueError("CAST_DB_PATH refused")
+        raise ValueError(f"{_db_var} refused")
     import sqlite3 as _sqlite3
     con = _sqlite3.connect(db_path, timeout=3)
     con.execute(

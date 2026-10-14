@@ -539,7 +539,8 @@ commit_all_fixture() {
   local tmp_repo shim="$BATS_TEST_TMPDIR/shim"
   tmp_repo="$(make_clean_tmp_repo)"
   mkdir -p "$shim"
-  # Pass the non-regular scan (-print) through; fail only the .py listing (-type f ... -print0).
+  # Pass the non-regular scan (-print) through; fail only the .py compile-gate listing
+  # (-type f ... -print0). The case-collision -print0 scan (no -type f) passes through too.
   cat > "$shim/find" <<'SHIM'
 #!/bin/bash
 case "$*" in *"-type f"*-print0*) exit 3 ;; esac
@@ -779,9 +780,10 @@ SHIM
   local mark="$BATS_TEST_TMPDIR/shim.pid" out="$BATS_TEST_TMPDIR/term-install.out" pid i=0 rc=0
   tmp_repo="$(make_clean_tmp_repo)"
   mkdir -p "$shim" "$tmpd"
-  # find shim: passes every scan through except the -print0 listing, which records its pid and
-  # parks. The list file already exists (mktemp ran, trap armed) while find is parked, which is
-  # the only window in which a signal could leak it.
+  # find shim: passes every scan through (including the case-collision -print0 listing) except the
+  # .py compile-gate listing (-type f ... -print0), which records its pid and parks. The
+  # compile-gate list file already exists (mktemp ran, trap armed) while find is parked, which is
+  # the window in which a signal could leak it.
   cat > "$shim/find" <<SHIM
 #!/bin/bash
 case "\$*" in
@@ -1321,4 +1323,38 @@ PYEOF
   [[ "$output" != *"Installation complete"* ]]
   # Aborted before settings were regenerated / hooks wired.
   [ ! -e "$HOME/.claude/settings.json" ]
+}
+
+# --- v10.3.2 leftovers: install.sh Low findings (b) PATH trailing slash, (a) newline filenames ---
+
+@test "PATH note: LOCAL_BIN with a trailing slash in PATH does not warn 'not in your PATH'" {
+  PATH="$HOME/.local/bin/:$PATH" run_install > "$BATS_TEST_TMPDIR/path.out"
+  grep -q "Installation complete" "$BATS_TEST_TMPDIR/path.out"
+  run grep -c "is not in your PATH" "$BATS_TEST_TMPDIR/path.out"
+  [ "$output" = "0" ]
+}
+
+@test "Unmanaged scan: a filename containing a newline is one entry, not bogus split names" {
+  mkdir -p "$HOME/.claude/scripts"
+  : > "$HOME/.claude/scripts/zz-nl-aaa"$'\n'"zz-nl-bbb"
+  run_install > "$BATS_TEST_TMPDIR/nl.out"
+  grep -q "Installation complete" "$BATS_TEST_TMPDIR/nl.out"
+  # The split half must never be reported as its own file.
+  run grep -c "UNMANAGED file in ~/.claude/scripts: zz-nl-bbb" "$BATS_TEST_TMPDIR/nl.out"
+  [ "$output" = "0" ]
+  # The real (single) entry is reported once (sanitized name keeps the zz-nl-aaa prefix).
+  run grep -c "UNMANAGED file in ~/.claude/scripts: zz-nl-aaa" "$BATS_TEST_TMPDIR/nl.out"
+  [ "$output" = "1" ]
+}
+
+@test "Unmanaged scan: a symlinked ~/.claude/scripts root is still scanned" {
+  local real="$BATS_TEST_TMPDIR/real-scripts"
+  mkdir -p "$real" "$HOME/.claude"
+  : > "$real/zz-symlink-leftover.sh"
+  ln -s "$real" "$HOME/.claude/scripts"
+  run_install > "$BATS_TEST_TMPDIR/sl.out"
+  grep -q "Installation complete" "$BATS_TEST_TMPDIR/sl.out"
+  [ -L "$HOME/.claude/scripts" ]
+  run grep -c "UNMANAGED file in ~/.claude/scripts: zz-symlink-leftover.sh" "$BATS_TEST_TMPDIR/sl.out"
+  [ "$output" = "1" ]
 }
