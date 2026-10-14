@@ -131,12 +131,11 @@ now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # Log to cast.db routing_events
-# CAST_DB_PATH override (project convention), validated through cast_db.validate_db_path so
-# a refused path is not written. python -I drops the script dir from sys.path, so load
+# When CAST_DB_URL or CAST_DB_PATH is present, resolve the DB through cast_db._get_db_path
+# (sqlite:/// URL first, then PATH, always validated); a refusal skips the row. python -I drops the script dir from sys.path, so load
 # cast_db.py by file path next to cast-redact.py. Any failure to validate -> skip the write.
 db_path = os.path.expanduser("~/.claude/cast.db")
 _env_url = os.environ.get("CAST_DB_URL", "")
-_env_db = os.environ.get("CAST_DB_PATH", "")
 # Same precedence as cast_db._get_db_path: a sqlite:/// CAST_DB_URL wins over CAST_DB_PATH.
 _db_var = "CAST_DB_URL" if _env_url.startswith("sqlite:///") else "CAST_DB_PATH"
 if "CAST_DB_URL" in os.environ or "CAST_DB_PATH" in os.environ:
