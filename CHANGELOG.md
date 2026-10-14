@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.4.0] — 2026-10-14
+
 ### Removed
 - **`CAST_DB_URL` is retired; `CAST_DB_PATH` is the only way to point CAST at a database.** The variable was only
   honoured when it held a `sqlite:///<path>` URL (other values were silently ignored), nothing in code or config set
