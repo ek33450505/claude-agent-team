@@ -54,8 +54,9 @@ itself, against an explicit, ORDERED, named root list (first hit wins):
      behaviour, kept last among the direct-join roots)
   7. LAST RESORT — project-git-suffix: after every root above misses,
      resolve against the project's git-tracked file list (`git -C
-     <project_root> ls-files`, project_root = the decoded root from step 3,
-     falling back to cwd when that decode failed). A candidate matches if
+     <project_root> ls-files`, project_root = the decoded root from step 3;
+     when that decode failed this root is SKIPPED — never cwd — and index-only
+     entries absent from the worktree are ignored). A candidate matches if
      its repo-relative path equals the ref or ends with "/<ref>" — this is
      what resolves memories that cite `run.sh` for `tests/run.sh` or
      `planner.md` for `agents/core/planner.md`. Exactly one match resolves
@@ -79,33 +80,12 @@ ref that has already failed every resolution root above — a ref of this
 shape that DOES resolve is reported as a normal resolved ref, never routed
 into the ephemeral bucket.
 
-Retired project refs (CAST v10 J-4, 2026-08-26): most REF-BROKEN findings
-in the real corpus turned out to be memories correctly citing a script that
-was deliberately DELETED from the same project's own git history — not a
-stale or wrong memory, just an accurate pointer to something that no longer
-exists. That is the identical argument the ephemeral-session-artifact case
-above already makes, applied to a real project file instead of a
-~/.claude/ session artifact. get_retired_info() checks this ONLY for a ref
-that has already failed every resolution root above (direct-join roots,
-the project-git-suffix fallback, AND the ephemeral-session-artifact check):
-it runs `git -C <project_root> log --all --diff-filter=D --format='%h %ad'
---date=short -1 -- ':(glob)**/<basename>'` against the ref's OWN decoded
-project root (never os.getcwd() — a cwd-anchored git history would be the
-WRONG repo's history for any memory whose project differs from the
-invoking cwd; this is the same cwd-anchoring bug class fixed in
-gen-completions.sh). A non-empty result means a file with that basename
-was deleted at some point in that project's history; the deleting commit
-and date are reported so a RETIRED claim is auditable by hand, not a bare
-assertion — strong evidence the ref is the same file, but not proof.
-Results are cached per (project_root, basename) within a run
-(_RETIRED_CACHE) — one `git log` per otherwise-unresolvable basename, not
-per ref occurrence, mirroring the bound discipline get_git_tracked_files()
-already applies. Fails CLOSED: a ref stays REF-BROKEN (never guessed
-retired) if project_root is None (undecodable project), git is
-unavailable, the subprocess errors, or it times out (10s bound, same as
-get_git_tracked_files()). Like ephemeral refs, a ref of this shape that
-actually resolves under an earlier root is a normal resolved ref, never
-routed through this check.
+Refs to deleted files: a memory citing a script that was deliberately DELETED
+from its project is classified REF-BROKEN like any other unresolvable ref. An
+earlier version looked the basename up in the project's git history to excuse
+it (RETIRED); that required running `git log` in an agent-writable repo, which
+cannot be made safe with a config denylist (a promisor lazy fetch still runs
+repo-config programs), so the lookup was removed. A human reads those entries.
 
 Bare-extension extraction artifacts: cast_memory_verifier's path regex
 occasionally extracts a fragment like "init/.sh/.py" from prose such as
@@ -122,24 +102,15 @@ A file classifies as:
   REF-BROKEN     — at least one extracted path could not be resolved under
                    any root above (or matched more than one git-tracked
                    file — ambiguous), and is not excused as an
-                   ephemeral-session-artifact ref or a RETIRED ref. This
+                   ephemeral-session-artifact ref. This
                    measures "could not be resolved" — it is NOT proof the
                    memory's underlying claim is wrong, only that a human
                    should read it to confirm. NEVER auto-bumped.
   REFS-OK        — every extracted path resolved under some root. Bump-
                    eligible under --apply.
-  RETIRED        — every extracted path either resolved OR names a file
-                   deliberately deleted from the memory's OWN project git
-                   history (get_retired_info()); no genuinely missing, no
-                   ambiguous, and no ephemeral refs. NOT a failure — see
-                   "Retired project refs" above. Reported separately from
-                   REF-BROKEN and REFS-OK, and NEVER auto-bumped for the
-                   same reason as EPHEMERAL-ONLY: a refs-resolved bump
-                   would claim evidence for a ref that was excused, not
-                   resolved.
   EPHEMERAL-ONLY — every extracted path either resolved OR is an
                    unresolvable ephemeral-session-artifact ref; no
-                   genuinely missing, no ambiguous, and no retired refs.
+                   genuinely missing and no ambiguous refs.
                    NOT a failure. Reported separately from REF-BROKEN
                    (these are known-dead pointers, not evidence of rot)
                    but deliberately NOT folded into REFS-OK either and
@@ -153,12 +124,6 @@ A file classifies as:
                    by zero evidence, so this is its own class and is NEVER
                    auto-bumped either.
 
-Precedence when a file's unresolved refs mix ephemeral and retired shapes
-(no missing, no ambiguous): RETIRED wins. This is an implementation choice,
-not an observed real-corpus case as of 2026-08-26 — the two shapes don't
-overlap in practice (ephemeral refs point under ~/.claude/, retired refs
-point at project-tracked files) but a basename collision is possible.
-
 Default mode is REPORT-ONLY and never modifies a file. The report header
 names the root list once (not per-ref) so any REF-BROKEN claim can be
 checked by hand; --json additionally records which root resolved each
@@ -168,8 +133,9 @@ matched ref.
   - the existing `verified_at:` line's value is replaced with today's date
     (UTC, %Y-%m-%d), preserving that line's exact leading whitespace;
   - a `verified_by: cast-verify-memories.py (refs-resolved)` line is placed
-    immediately after it, at the same indentation — replacing an existing
-    verified_by: line rather than adding a second one.
+    immediately after it, at the same indentation. If a `verified_by:` key
+    already exists ANYWHERE in the frontmatter (above or below verified_at),
+    that line is replaced in place instead of adding a second one.
 
 ⭐ WHY verified_by EXISTS (Ed, 2026-08-19): a refs-resolved check is a WEAKER
 claim than a human confirming the memory is still true — it only proves the
@@ -181,10 +147,27 @@ A bumped file's diff is at most those two lines: no reordering, reflowing, or
 reformatting of anything else. Writes are atomic (tmp file in the same dir +
 os.replace).
 
-⚠️ Scheduling: --apply is intentionally NOT wired into cast-maintenance.sh or
-any launchd job. An unattended auto-bump is a verification claim made with
-nobody watching — report-only wiring is a separate decision that has not been
-made yet.
+Scheduling: cast-maintenance.sh (daily, via launchd, OUTSIDE the sandbox) runs
+`--apply` and logs to logs/memory-verify.log. Without a schedule the
+stale-memory count only ever climbed.
+
+Git use: the ONLY git call is `git ls-files` (search-strategy step 7), made
+through cast_git_safe.run() — the shared reviewed primitive (trusted git
+binary, scrubbed env, repo-config exec paths disabled). Memory dirs decode to
+project repos an agent can write to, so no other git subcommand is run; any
+non-zero rc from the primitive = unknown = no result, which fails toward
+REF-BROKEN.
+
+Write safety: files are read strictly as UTF-8 with newline="" (a non-UTF-8
+file is skipped, counted on stderr, never rewritten; CRLF survives
+byte-for-byte). The bump only edits files whose frontmatter lines end in "\\n"
+(optionally preceded by "\\r"): lines are split on "\\n" ONLY, and a frontmatter
+line containing any other line-boundary character (a lone CR, VT, FF, FS/GS/RS,
+NEL, U+2028, U+2029) makes the file skipped byte-identical. Files are written with
+newline="" and the original file mode, and just before os.replace the file is
+re-read — if its bytes changed since the snapshot the bump is skipped (logged
+to stderr) rather than clobbering a concurrent edit. The remaining window is
+the gap between that re-read and os.replace.
 
 Env overrides:
   CAST_MEMORIES_BASE_DIR — override ~/.claude/projects
@@ -199,13 +182,14 @@ import argparse
 import itertools
 import json
 import os
-import subprocess
+import re
 import sys
 import tempfile
 from datetime import date
 from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cast_git_safe  # noqa: E402
 import cast_memory_meta  # noqa: E402
 import cast_memory_verifier  # noqa: E402
 
@@ -224,8 +208,9 @@ SEARCH_STRATEGY = [
     "5) ~/.claude/<ref with leading 'claude/' segment stripped> "
     "(claude/-prefix refs)",
     "6) cwd/<ref>, cwd/scripts/<basename>",
-    "7) LAST RESORT: project's git-tracked files, exact or path-suffix match "
-    "(git -C <project_root> ls-files; ambiguous multi-hit stays REF-BROKEN)",
+    "7) LAST RESORT: project's git-tracked files present on disk, exact or "
+    "path-suffix match (git -C <project_root> ls-files; needs a decoded project "
+    "root; ambiguous multi-hit stays REF-BROKEN)",
 ]
 
 
@@ -240,14 +225,22 @@ def default_stale_days() -> int:
     return int(os.environ.get("CAST_STALE_DAYS", "30"))
 
 
-def find_stale_candidates(base_dir: str, stale_days: int) -> List[Tuple[str, str]]:
-    """Return (filepath, content) pairs for files cast-stale-memories.py flags."""
+def find_stale_candidates(
+    base_dir: str, stale_days: int
+) -> Tuple[List[Tuple[str, str]], int]:
+    """Return ((filepath, content) pairs for files cast-stale-memories.py
+    flags, count of memory files skipped because they are not valid UTF-8)."""
     today = date.today()
     candidates = []
+    non_utf8 = 0
     for filepath in cast_memory_meta.iter_memory_files(base_dir):
         try:
-            with open(filepath, "r", errors="replace") as fh:
+            with open(filepath, "r", encoding="utf-8", newline="") as fh:
                 content = fh.read()
+        except UnicodeDecodeError:
+            # Non-UTF-8 files are skipped, never rewritten; counted for stderr.
+            non_utf8 += 1
+            continue
         except OSError:
             continue
 
@@ -263,7 +256,7 @@ def find_stale_candidates(base_dir: str, stale_days: int) -> List[Tuple[str, str
             continue
 
         candidates.append((filepath, content))
-    return candidates
+    return candidates, non_utf8
 
 
 def decode_project_dir(encoded: str) -> Optional[str]:
@@ -434,19 +427,13 @@ def get_git_tracked_files(project_root: str) -> Optional[List[str]]:
         return _GIT_TRACKED_FILES_CACHE[project_root]
 
     files: Optional[List[str]]
-    try:
-        result = subprocess.run(
-            ["git", "-C", project_root, "ls-files"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            files = None
-        else:
-            files = [line for line in result.stdout.splitlines() if line]
-    except (OSError, subprocess.SubprocessError):
+    # cast_git_safe.run never raises for git failure; ANY non-zero rc is
+    # "unknown" (not a repo, refused, timeout, no trusted git) -> no result.
+    result = cast_git_safe.run(project_root, ["ls-files"], 10.0)
+    if result.returncode != 0:
         files = None
+    else:
+        files = [line for line in result.stdout.splitlines() if line]
 
     _GIT_TRACKED_FILES_CACHE[project_root] = files
     return files
@@ -478,6 +465,12 @@ def resolve_git_suffix_ref(
         return None, None
 
     files = get_git_tracked_files(project_root)
+    if not files:
+        return None, None
+    # `git ls-files` also lists index-only entries (deleted from the worktree
+    # but not yet removed from the index). A ref to such a file must NOT
+    # resolve, so keep only entries that exist on disk.
+    files = [f for f in files if os.path.isfile(os.path.join(project_root, f))]
     if not files:
         return None, None
 
@@ -547,104 +540,21 @@ def _is_bare_extension_ref(ref: str) -> bool:
     return final_segment in _BARE_EXTENSION_STEMS
 
 
-# Per-(project_root, basename) cache for get_retired_info(). Many memory
-# files under the same project can cite the same retired basename (e.g.
-# several files across a project all name "cast-migrate.sh"), and this runs
-# a `git log` subprocess per otherwise-unresolvable ref — caching by
-# basename within a run keeps that to one subprocess per (root, basename)
-# pair, mirroring the bound discipline get_git_tracked_files() already
-# applies for the project-git-suffix fallback and decode_project_dir()
-# applies for its bounded trailing-segment search.
-_RETIRED_CACHE: Dict[Tuple[str, str], Optional[Tuple[str, str]]] = {}
-
-
-def get_retired_info(ref: str, project_root: Optional[str]) -> Optional[Tuple[str, str]]:
-    """Return (deleting_commit, deleted_date) if a file with `ref`'s
-    basename was deliberately deleted from `project_root`'s OWN git
-    history, else None.
-
-    Resolves against `project_root` ONLY — never os.getcwd() (see the
-    module docstring's "Retired project refs" paragraph on why
-    cwd-anchoring would check the wrong repo's history). Absolute refs are
-    skipped, same rationale as resolve_git_suffix_ref(): an absolute path
-    is only meaningfully checked "as given".
-
-    Fails CLOSED, never raises: returns None (caller falls through to
-    REF-BROKEN) if project_root is None, `ref` is absolute, git is
-    unavailable, project_root is not a git work tree, the subprocess exits
-    non-zero, or it times out (10s bound, same as get_git_tracked_files()).
-    A None here is never proof the ref is genuinely missing — only that
-    this check could not confirm retirement, so the conservative (fail
-    closed) REF-BROKEN classification stands.
-    """
-    if not project_root or os.path.isabs(ref):
-        return None
-
-    basename = os.path.basename(ref.replace(os.sep, "/"))
-    if not basename:
-        return None
-
-    cache_key = (project_root, basename)
-    if cache_key in _RETIRED_CACHE:
-        return _RETIRED_CACHE[cache_key]
-
-    result: Optional[Tuple[str, str]] = None
-    try:
-        proc = subprocess.run(
-            [
-                "git",
-                "-C",
-                project_root,
-                "log",
-                "--all",
-                "--diff-filter=D",
-                "--format=%h %ad",
-                "--date=short",
-                "-1",
-                "--",
-                f":(glob)**/{basename}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if proc.returncode == 0:
-            line = proc.stdout.strip()
-            if line:
-                parts = line.split(None, 1)
-                if len(parts) == 2:
-                    result = (parts[0], parts[1])
-    except (OSError, subprocess.SubprocessError):
-        result = None
-
-    _RETIRED_CACHE[cache_key] = result
-    return result
-
-
 def classify(content: str, memory_filepath: str) -> Dict:
-    """Classify content as REF-BROKEN / REFS-OK / RETIRED / EPHEMERAL-ONLY /
+    """Classify content as REF-BROKEN / REFS-OK / EPHEMERAL-ONLY /
     NO-REFS, with per-ref detail. See the module docstring's "A file
     classifies as:" block for the full contract; summary:
 
-    RETIRED: every ref either resolved OR names a file deliberately
-    deleted from the memory's OWN project git history
-    (get_retired_info()) — no genuinely missing, no ambiguous, and no
-    ephemeral refs. NOT --apply-bump-eligible, same reasoning as
-    EPHEMERAL-ONLY below.
-
     EPHEMERAL-ONLY: every ref either resolved OR is an unresolvable
     ephemeral-session-artifact ref (is_ephemeral_session_ref()) — no
-    genuinely missing, no ambiguous, and no retired refs. Deliberately NOT
+    genuinely missing and no ambiguous refs. Deliberately NOT
     the same as REFS-OK: bumping verified_at/verified_by would claim
     "refs-resolved" evidence for refs that were in fact never resolved,
     just excused as dead-artifact pointers. That is a weaker, different
-    claim than what verified_by promises, so EPHEMERAL-ONLY (and RETIRED)
-    are never --apply-bump-eligible (see the verified_by rationale in the
+    claim than what verified_by promises, so EPHEMERAL-ONLY
+    is never --apply-bump-eligible (see the verified_by rationale in the
     module docstring) — the conservative choice when it's a close call
     between reusing REFS-OK and minting a new state.
-
-    Precedence when a file mixes ephemeral AND retired unresolved refs
-    (no missing, no ambiguous): RETIRED wins — see the module docstring.
     """
     paths, _functions = cast_memory_verifier.extract_paths_and_functions(content)
     # Drop bare-extension extraction artifacts (e.g. the final segment of
@@ -659,21 +569,19 @@ def classify(content: str, memory_filepath: str) -> Dict:
             "missing_refs": [],
             "ambiguous_refs": [],
             "ephemeral_refs": [],
-            "retired_refs": [],
             "resolved_refs": [],
         }
 
     roots, project_root = build_search_roots(memory_filepath)
-    # search-strategy step 7's fallback root: the decoded project root when
-    # available, else cwd (so the fallback still applies when a memory's
-    # project dir couldn't be decoded but its refs are cwd-relative repo
-    # paths — the common case when running this script from within a repo).
-    git_root = project_root or os.getcwd()
+    # search-strategy step 7's root: the decoded project root ONLY. When the
+    # project dir can't be decoded this root is skipped (fail closed): falling
+    # back to cwd would resolve the ref against whatever repo the process
+    # happens to run in (e.g. the unattended launchd run), not the memory's.
+    git_root = project_root
 
     missing: List[str] = []
     ambiguous: List[Dict] = []
     ephemeral: List[str] = []
-    retired: List[Dict] = []
     resolved: List[Dict] = []
     for ref in sorted(set(paths)):
         hit = resolve_ref(ref, roots)
@@ -690,21 +598,10 @@ def classify(content: str, memory_filepath: str) -> Dict:
         elif is_ephemeral_session_ref(ref):
             ephemeral.append(ref)
         else:
-            # RETIRED resolves against the memory's OWN decoded project
-            # root ONLY — never git_root's cwd fallback (see
-            # get_retired_info()'s docstring and the module docstring's
-            # "Retired project refs" paragraph).
-            retired_info = get_retired_info(ref, project_root)
-            if retired_info is not None:
-                commit_hash, deleted_date = retired_info
-                retired.append({"ref": ref, "commit": commit_hash, "date": deleted_date})
-            else:
-                missing.append(ref)
+            missing.append(ref)
 
     if missing or ambiguous:
         status = "REF-BROKEN"
-    elif retired:
-        status = "RETIRED"
     elif ephemeral:
         status = "EPHEMERAL-ONLY"
     else:
@@ -715,7 +612,6 @@ def classify(content: str, memory_filepath: str) -> Dict:
         "missing_refs": sorted(missing),
         "ambiguous_refs": ambiguous,
         "ephemeral_refs": sorted(ephemeral),
-        "retired_refs": sorted(retired, key=lambda r: r["ref"]),
         "resolved_refs": resolved,
     }
 
@@ -732,14 +628,27 @@ def _line_ending(line: str) -> str:
     return ""
 
 
+# Characters str.splitlines() treats as line boundaries besides "\n". A
+# frontmatter line containing one (after its own \n / \r\n terminator is
+# removed) means the file is not safely editable here.
+_EXOTIC_LINE_BOUNDARY = re.compile("[\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+
+
 def bump_verified(content: str, today_str: str) -> Optional[str]:
     """Return new content with verified_at bumped and verified_by set, or
-    None if no verified_at: line could be found in the frontmatter (should
-    not happen for a candidate that already parsed a verified_at date, but
-    guarded defensively so a caller never writes an unexpected file)."""
-    lines = content.splitlines(keepends=True)
+    None if no verified_at: line could be found in the frontmatter, or the
+    frontmatter contains a non-\\n line boundary (the caller then skips the
+    file untouched).
+
+    An existing verified_by: line ANYWHERE in the frontmatter (above or
+    below verified_at) is replaced in place, keeping its own indentation;
+    only when none exists is one inserted right after verified_at."""
+    # Split on "\n" ONLY (str.splitlines also splits on lone CR, VT, FF, NEL,
+    # U+2028 ... which would leave the rewritten lines without terminators).
+    lines = re.findall(r"[^\n]*\n|[^\n]+", content)
     in_frontmatter = False
     va_idx = None
+    vb_idx = None
     for i, line in enumerate(lines):
         stripped = line.strip()
         if i == 0 and stripped == "---":
@@ -749,9 +658,15 @@ def bump_verified(content: str, today_str: str) -> Optional[str]:
             break
         if stripped == "---":
             break
-        if stripped.startswith("verified_at:"):
+        body = line[:-1] if line.endswith("\n") else line
+        if body.endswith("\r"):
+            body = body[:-1]
+        if _EXOTIC_LINE_BOUNDARY.search(body):
+            return None  # not a plain-\n/CRLF file: skip, never rewrite
+        if va_idx is None and stripped.startswith("verified_at:"):
             va_idx = i
-            break
+        elif vb_idx is None and stripped.startswith("verified_by:"):
+            vb_idx = i
 
     if va_idx is None:
         return None
@@ -761,25 +676,39 @@ def bump_verified(content: str, today_str: str) -> Optional[str]:
     nl = _line_ending(va_line)
     lines[va_idx] = f"{leading_ws}verified_at: {today_str}{nl}"
 
-    vb_idx = va_idx + 1
-    vb_line = lines[vb_idx] if vb_idx < len(lines) else ""
-    if vb_line.strip().startswith("verified_by:"):
-        vb_nl = _line_ending(vb_line)
-        lines[vb_idx] = f"{leading_ws}verified_by: {VERIFIED_BY_VALUE}{vb_nl or nl}"
+    if vb_idx is not None:
+        vb_line = lines[vb_idx]
+        vb_ws = _leading_whitespace(vb_line)
+        lines[vb_idx] = f"{vb_ws}verified_by: {VERIFIED_BY_VALUE}{_line_ending(vb_line) or nl}"
     else:
         lines.insert(va_idx + 1, f"{leading_ws}verified_by: {VERIFIED_BY_VALUE}{nl}")
 
     return "".join(lines)
 
 
-def write_atomic(filepath: str, new_content: str) -> None:
+def write_atomic(filepath: str, new_content: str, snapshot: str) -> bool:
+    """Atomically replace `filepath` with `new_content`, preserving its mode.
+
+    Returns False (and writes nothing) if the file's bytes changed since
+    `snapshot` was read — a concurrent edit must win over our bump. Raises
+    OSError on a real write failure. Text is written with newline="" so CRLF
+    content round-trips unchanged."""
     dirpath = os.path.dirname(filepath) or "."
     fd, tmp_path = None, None
     try:
+        mode = os.stat(filepath).st_mode & 0o7777
         fd, tmp_path = tempfile.mkstemp(dir=dirpath, prefix=".cast-verify-tmp-")
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
             fh.write(new_content)
+        os.chmod(tmp_path, mode)
+        # Lost-update guard: re-read immediately before the replace.
+        with open(filepath, "rb") as fh:
+            current = fh.read()
+        if current != snapshot.encode("utf-8"):
+            os.remove(tmp_path)
+            return False
         os.replace(tmp_path, filepath)
+        return True
     except OSError:
         if tmp_path and os.path.exists(tmp_path):
             try:
@@ -808,13 +737,17 @@ def main() -> int:
     base_dir = args.base_dir or default_base_dir()
     stale_days = args.days if args.days is not None else default_stale_days()
 
-    candidates = find_stale_candidates(base_dir, stale_days)
+    candidates, non_utf8 = find_stale_candidates(base_dir, stale_days)
+    if non_utf8:
+        print(
+            f"cast-verify-memories: skipped {non_utf8} non-UTF-8 memory file(s)",
+            file=sys.stderr,
+        )
 
     ref_broken: List[Dict] = []
     refs_ok: List[Dict] = []
     no_refs: List[Dict] = []
     ephemeral_only: List[Dict] = []
-    retired_only: List[Dict] = []
     write_failure = False
     today_str = date.today().strftime("%Y-%m-%d")
 
@@ -850,18 +783,6 @@ def main() -> int:
             )
             continue
 
-        if status == "RETIRED":
-            # Not bump-eligible — same reasoning as EPHEMERAL-ONLY above,
-            # see classify()'s docstring.
-            retired_only.append(
-                {
-                    "file": filepath,
-                    "retired_refs": result["retired_refs"],
-                    "resolved_refs": result["resolved_refs"],
-                }
-            )
-            continue
-
         # REFS-OK — the only bump-eligible class.
         entry = {
             "file": filepath,
@@ -871,11 +792,23 @@ def main() -> int:
         if args.apply:
             new_content = bump_verified(content, today_str)
             if new_content is None:
-                write_failure = True
+                entry["skipped"] = "frontmatter not safely editable"
+                print(
+                    f"cast-verify-memories: skipped {filepath} "
+                    "(frontmatter not safely editable)",
+                    file=sys.stderr,
+                )
             else:
                 try:
-                    write_atomic(filepath, new_content)
-                    entry["bumped"] = True
+                    if write_atomic(filepath, new_content, content):
+                        entry["bumped"] = True
+                    else:
+                        entry["skipped"] = "changed during run"
+                        print(
+                            f"cast-verify-memories: skipped {filepath} "
+                            "(modified during run)",
+                            file=sys.stderr,
+                        )
                 except OSError as exc:
                     write_failure = True
                     entry["error"] = str(exc)
@@ -889,7 +822,6 @@ def main() -> int:
             "refs_ok": refs_ok,
             "no_refs": no_refs,
             "ephemeral_only": ephemeral_only,
-            "retired": retired_only,
             "applied": args.apply,
         }
         print(json.dumps(payload, indent=2))
@@ -900,13 +832,12 @@ def main() -> int:
         print(
             f"{len(candidates)} stale memories evaluated "
             f"({len(ref_broken)} REF-BROKEN, {len(refs_ok)} REFS-OK, "
-            f"{len(no_refs)} NO-REFS, {len(ephemeral_only)} EPHEMERAL-ONLY, "
-            f"{len(retired_only)} RETIRED)"
+            f"{len(no_refs)} NO-REFS, {len(ephemeral_only)} EPHEMERAL-ONLY)"
         )
         if ref_broken:
             # "REF-BROKEN" measures "could not be resolved" — it is NOT
             # proof the memory's underlying claim is wrong (see the module
-            # docstring). RETIRED and EPHEMERAL-ONLY below are the excused
+            # docstring). EPHEMERAL-ONLY below is the excused
             # counterpart of this same "could not resolve" measurement.
             print(
                 "REF-BROKEN (a cited ref could not be resolved under any "
@@ -941,22 +872,6 @@ def main() -> int:
             for entry in ephemeral_only:
                 for eph in entry["ephemeral_refs"]:
                     print(f"  {entry['file']} — ephemeral ref: {eph}")
-        if retired_only:
-            print(
-                "RETIRED (NOT a failure — not bump-eligible because the ref "
-                "named a real file deliberately deleted from this project's "
-                "own git history; the memory's citation is an accurate "
-                "historical record, not evidence the memory is stale). "
-                "Matching is by BASENAME, so this is strong evidence, NOT "
-                "proof the deleted file is the one the memory meant — the "
-                "commit and date below are printed so you can check by hand:"
-            )
-            for entry in retired_only:
-                for r in entry["retired_refs"]:
-                    print(
-                        f"  {entry['file']} — retired ref: {r['ref']} "
-                        f"(deleted {r['commit']} {r['date']})"
-                    )
         if refs_ok:
             print("REFS-OK:")
             for entry in refs_ok:

@@ -1776,3 +1776,53 @@ print(json.dumps({
   table_exists="$(sqlite3 "$CAST_DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_runs';")"
   [[ "$table_exists" = "agent_runs" ]]
 }
+
+# ---------------------------------------------------------------------------
+# Mid-run duplicate SubagentStart + reaper interplay
+# ---------------------------------------------------------------------------
+
+stop_payload_for_id() {
+  python3 -c "
+import json, sys
+print(json.dumps({
+    'agent_type': 'security',
+    'agent_id':   sys.argv[1],
+    'session_id': 'sess-reopen',
+    'stop_reason': 'end_turn',
+    'last_assistant_message': 'Status: DONE\nSummary: done',
+}))
+" "$1"
+}
+
+start_payload_for_id() {
+  python3 -c "
+import json, sys
+print(json.dumps({'agent_type': 'security', 'session_id': 'sess-reopen', 'agent_id': sys.argv[1]}))
+" "$1"
+}
+
+@test "duplicate mid-run SubagentStart then ONE SubagentStop → zero running rows left" {
+  local START_SH="$REPO_DIR/scripts/cast-subagent-start-hook.sh" aid="aid-e2e-001"
+  bash "$START_SH" <<< "$(start_payload_for_id "$aid")"
+  bash "$START_SH" <<< "$(start_payload_for_id "$aid")"
+  run bash "$HOOK_SH" <<< "$(stop_payload_for_id "$aid")"
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE agent_id='${aid}' AND status='running';"
+  assert_output "0"
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE agent_id='${aid}' AND status='DONE';"
+  assert_output "1"
+}
+
+@test "SubagentStop for an agent_id whose only row was reaped 'abandoned' → row reopened and closed with the real status" {
+  local START_SH="$REPO_DIR/scripts/cast-subagent-start-hook.sh" aid="aid-reap-001"
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TIMESTAMP;"
+  bash "$START_SH" <<< "$(start_payload_for_id "$aid")"
+  # Simulate cast-abandon-stale-runs.py reaping the row while the run is still alive.
+  sqlite3 "$CAST_DB_PATH" "UPDATE agent_runs SET status='abandoned', abandoned_at='2026-01-01T00:00:00Z', ended_at='2026-01-01T00:00:00Z', response='[NO RESPONSE - reaped]' WHERE agent_id='${aid}';"
+  run bash "$HOOK_SH" <<< "$(stop_payload_for_id "$aid")"
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE agent_id='${aid}';"
+  assert_output "1"
+  run sqlite3 "$CAST_DB_PATH" "SELECT status || '|' || COALESCE(abandoned_at,'NULL') || '|' || (response LIKE '%Summary: done%') FROM agent_runs WHERE agent_id='${aid}';"
+  assert_output "DONE|NULL|1"
+}

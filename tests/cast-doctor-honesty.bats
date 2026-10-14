@@ -1027,3 +1027,49 @@ SQL
   refute_output --partial "mismatch >\$0.01"
   refute_output --partial "777"
 }
+
+# ── tool_call_failures: ordinary Bash non-zero exits are INFO with a breakdown ─
+# Measured 2026-10-14: ~78% of 7d tool_call_failures are `Exit code N` Bash
+# errors at a steady weekly volume, so the line is INFO (never contributes to
+# "Some checks need attention") and splits bash exits from everything else.
+@test "tool_call_failures: shows INFO with bash/other breakdown, never WARN" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO tool_call_failures (session_id, tool_name, error, timestamp) VALUES
+ ('s1','Bash','Exit code 1', strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 hours')),
+ ('s1','Bash','Exit code 127', strftime('%Y-%m-%dT%H:%M:%SZ','now','-2 hours')),
+ ('s1','Bash','Exit code 2', strftime('%Y-%m-%dT%H:%M:%SZ','now','-90 minutes')),
+ ('s1','Read','File does not exist', strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 hours')),
+ ('s1','Read','Exit code 5 (not a Bash failure)', strftime('%Y-%m-%dT%H:%M:%SZ','now','-30 minutes')),
+ ('s1','Bash','Exit code 9', strftime('%Y-%m-%dT%H:%M:%SZ','now','-20 days'));
+SQL
+
+  _run_doctor
+
+  assert_output --partial "[--] tool_call_failures (last 7d): 5 (bash non-zero exit 3"
+  assert_output --partial "other 2)"
+  assert_output --partial "most recent: Read"
+  refute_output --regexp '\[!!\] tool_call_failures'
+}
+
+# If the bash sub-query fails, say so instead of printing a fake "bash 0" split.
+@test "tool_call_failures: bash sub-query failure prints 'breakdown unavailable'" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  sqlite3 "$CAST_DB_PATH" "INSERT INTO tool_call_failures (session_id, tool_name, error, timestamp) VALUES ('s1','Bash','Exit code 1', strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 hours'));"
+
+  # PATH shim: real sqlite3 for everything except the Bash-exit COUNT query.
+  local real_sqlite shim="$BATS_TEST_TMPDIR/shim"
+  real_sqlite="$(command -v sqlite3)"
+  mkdir -p "$shim"
+  {
+    printf '#!/bin/bash\n'
+    printf 'case "$*" in *"Exit code"*) exit 1 ;; esac\n'
+    printf 'exec "%s" "$@"\n' "$real_sqlite"
+  } > "$shim/sqlite3"
+  chmod +x "$shim/sqlite3"
+
+  run env PATH="$shim:$PATH" bash "$CAST_BIN" doctor 2>&1
+  assert_output --partial "[--] tool_call_failures (last 7d): 1 (breakdown unavailable)"
+  refute_output --partial "bash non-zero exit 0"
+}

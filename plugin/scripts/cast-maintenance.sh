@@ -81,6 +81,12 @@ if [[ -f "${CAST_DIR}/scripts/cast-memory-staleness-sweep.sh" ]]; then
   log "Ran memory staleness sweep"
 fi
 
+# 7.5 Re-verify stale memory FILES (verified_at) whose refs all still resolve
+if [[ -f "${CAST_DIR}/scripts/cast-verify-memories.py" ]]; then
+  python3 -E -s "${CAST_DIR}/scripts/cast-verify-memories.py" --apply >> "${CAST_DIR}/logs/memory-verify.log" 2>&1 || true
+  log "Ran memory file re-verification (see logs/memory-verify.log)"
+fi
+
 # 8. Collect cookbook drift dispatch events
 if [[ -f "${CAST_DIR}/scripts/cast-cookbook-drift.sh" ]]; then
   bash "${CAST_DIR}/scripts/cast-cookbook-drift.sh" >> "${CAST_DIR}/logs/cookbook-drift.log" 2>&1 || true

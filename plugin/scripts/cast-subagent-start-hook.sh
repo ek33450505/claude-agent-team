@@ -186,9 +186,21 @@ for attempt in range(3):
         # Check if agent_runs has agent_id column
         cols = [r[1] for r in cur.execute("PRAGMA table_info(agent_runs)").fetchall()]
         if 'agent_id' in cols:
+            # Duplicate-start guard: Claude Code re-fires SubagentStart when the
+            # coordinator messages an agent that is MID-RUN, but fires only ONE
+            # SubagentStop when the run ends. A second 'running' row for the same
+            # agent_id is therefore never closed (the stop closes MIN(id) only) and
+            # is later reaped as 'abandoned', making `cast doctor` report a false
+            # "stopped without Status". So skip the insert while a 'running' row
+            # for this agent_id exists. A genuine resume starts after the previous
+            # run's stop closed its row, so it still gets a fresh row. Single
+            # INSERT..SELECT = atomic check-and-insert. No agent_id -> no dedupe.
             cur.execute(
-                "INSERT INTO agent_runs (agent, session_id, status, started_at, agent_id) VALUES (?, ?, 'running', ?, ?)",
-                (agent, sess, ts, agent_id),
+                "INSERT INTO agent_runs (agent, session_id, status, started_at, agent_id) "
+                "SELECT ?, ?, 'running', ?, ? "
+                "WHERE ? = '' OR NOT EXISTS ("
+                "SELECT 1 FROM agent_runs WHERE agent_id = ? AND status = 'running')",
+                (agent, sess, ts, agent_id, agent_id, agent_id),
             )
         else:
             cur.execute(

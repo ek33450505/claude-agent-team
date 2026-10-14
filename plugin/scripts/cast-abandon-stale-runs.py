@@ -494,7 +494,8 @@ def main() -> None:
                 SET status = 'abandoned', abandoned_at = ?,
                     ended_at = COALESCE(ended_at, ?),
                     response = COALESCE(response, ?)
-                WHERE id IN ({",".join("?" * len(row_ids))})
+                WHERE status = 'running'
+                  AND id IN ({",".join("?" * len(row_ids))})
                 ''',
                 [now_iso, now_iso, no_response_marker] + row_ids
             )

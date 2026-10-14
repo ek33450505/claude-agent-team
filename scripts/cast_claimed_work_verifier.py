@@ -257,6 +257,59 @@ def write_hallucination_record(db_path: str, session_id: str, agent_name: str,
     except Exception:
         pass  # Non-fatal: DB write failure doesn't block the hook
 
+_WRITE_TOOLS = frozenset({'Write', 'Edit', 'MultiEdit', 'NotebookEdit'})
+_TOOL_TOKEN = re.compile(r'[A-Za-z]+')
+
+
+def _installed_definition_path(agent_name: str):
+    """~/.claude/agents/<name>.md for the registered name (any `__label` suffix stripped).
+
+    Only the installed definition is consulted. CAST_REPO_ROOT derives from the hook cwd,
+    which the audited agent can steer, so a repo-local agents/core copy is NOT trusted.
+    """
+    base = re.sub(r'__.*$', '', (agent_name or '').strip())
+    if not base or not re.fullmatch(r'[A-Za-z0-9_.-]+', base) or base.startswith('.'):
+        return None
+    return os.path.join(os.path.expanduser('~'), '.claude', 'agents', base + '.md')
+
+
+def is_read_only_agent(agent_name: str) -> bool:
+    """True only when the installed definition's frontmatter `tools:` line is a plain
+    comma-separated list of bare tool names containing none of Write/Edit/MultiEdit/NotebookEdit.
+
+    Read-only agents (code-reviewer, security) list files they REVIEWED in "Files changed",
+    so verifying those claims only produces false [NOT FOUND] rows.
+
+    Fails toward verification (returns False) on: missing/unreadable definition, no `tools:`
+    line (agent inherits all tools), YAML list/flow form, or any token that is not a bare
+    name (e.g. `Write(src/*)`, trailing `# comment`, brackets).
+
+    Residual (accepted): the skip keys on the dispatch name, and a custom `name` overrides
+    the registered type -- same trust model as the `commit` exemption in main(). Read-only
+    agents that hold Bash can still create files; claims about those are no longer verified.
+    """
+    path = _installed_definition_path(agent_name)
+    if not path:
+        return False
+    try:
+        with open(path, encoding='utf-8') as fh:
+            lines = fh.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False
+    if not lines or lines[0].strip() != '---':
+        return False
+    for line in lines[1:]:
+        if line.strip() == '---':
+            return False
+        m = re.match(r'tools\s*:(.*)$', line)
+        if m:
+            tokens = [t.strip() for t in m.group(1).split(',')]
+            if not tokens or not all(_TOOL_TOKEN.fullmatch(t) for t in tokens):
+                return False
+            return not any(t in _WRITE_TOOLS for t in tokens)
+    return False
+
+
 def main():
     """Main entry point."""
     response_text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '')
@@ -271,6 +324,11 @@ def main():
     # inventory for "claimed file writes" produces 100% false positives.
     # Triage source: reports/2026-06-12-honesty-warn-triage.md (Bucket A, 27/73).
     if (os.environ.get('CAST_AGENT_NAME') or '').strip().lower() == 'commit':
+        sys.exit(0)
+
+    # Read-only agents (tools lack Write and Edit) list files they reviewed, not wrote.
+    if is_read_only_agent(agent_name):
+        print(f'[CAST-VERIFY] agent={agent_name} skipped: read-only agent', file=sys.stderr)
         sys.exit(0)
 
     # If no response text, exit silently

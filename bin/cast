@@ -3672,15 +3672,30 @@ PYEOF
       if [ "${_tcf_count:-0}" -eq 0 ]; then
         printf "%b tool_call_failures: no failures in last 7d\n" "$INFO"
       else
+        # Ordinary Bash non-zero exits are ~78% of volume and steady week over
+        # week (measured 2026-10-14), so this is INFO with a breakdown, not WARN.
+        local _tcf_bash_out _tcf_bash_rc _tcf_bash=0 _tcf_split
+        _tcf_bash_out="$(sqlite3 "$CAST_DB_PATH" \
+          "SELECT COUNT(*) FROM tool_call_failures \
+           WHERE datetime(timestamp) >= datetime('now','-7 days') \
+             AND tool_name = 'Bash' AND error LIKE 'Exit code %';" 2>/dev/null)"
+        _tcf_bash_rc=$?
+        if [ $_tcf_bash_rc -eq 0 ] && [[ "$_tcf_bash_out" =~ ^[0-9]+$ ]]; then
+          _tcf_bash="$_tcf_bash_out"
+          _tcf_split="(bash non-zero exit ${_tcf_bash}  ·  other $(( _tcf_count - _tcf_bash )))"
+        else
+          _tcf_split="(breakdown unavailable)"
+        fi
         if [[ -n "$_tcf_recent_out" ]]; then
           local _tcf_tool _tcf_err _tcf_ts
           IFS='|' read -r _tcf_tool _tcf_err _tcf_ts <<< "$_tcf_recent_out"
           # Truncate error to first 80 chars
           _tcf_err="${_tcf_err:0:80}"
-          printf "%b tool_call_failures (last 7d): %d  ·  most recent: %s — %s (%s)\n" \
-            "$WARN" "$_tcf_count" "$_tcf_tool" "$_tcf_err" "$_tcf_ts"
+          printf "%b tool_call_failures (last 7d): %d %s  ·  most recent: %s — %s (%s)\n" \
+            "$INFO" "$_tcf_count" "$_tcf_split" "$_tcf_tool" "$_tcf_err" "$_tcf_ts"
         else
-          printf "%b tool_call_failures (last 7d): %d\n" "$WARN" "$_tcf_count"
+          printf "%b tool_call_failures (last 7d): %d %s\n" \
+            "$INFO" "$_tcf_count" "$_tcf_split"
         fi
       fi
     fi
@@ -3993,6 +4008,12 @@ try:
             # Dangling pattern 2: setup/attachment/system entry before any
             # assistant turn was ever written (session bootstrapped but never ran)
             entry_type = last_entry.get("type", "") or ""
+            # Claude Code writes system/turn_duration at a normal turn end and
+            # system/away_summary on idle, so those are a clean stop, not a death.
+            if entry_type == "system" and (last_entry.get("subtype", "") or "") in (
+                "turn_duration", "away_summary"
+            ):
+                continue
             if entry_type in ("system", "attachment") or role == "system":
                 orphaned.append((st.st_mtime, fpath))
 except Exception as e:

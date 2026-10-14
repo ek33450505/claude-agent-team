@@ -290,3 +290,59 @@ assert chr(13) in d['agent_type'], 'fixture does not contain a real CR byte'
   count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs;" | tr -d ' ')
   [[ "$count" -eq 0 ]]
 }
+
+# ---------------------------------------------------------------------------
+# Duplicate SubagentStart for an agent that is still running
+#
+# Claude Code fires SubagentStart again when the coordinator messages an agent
+# that is MID-RUN ("The coordinator sent a message while you were working"),
+# but fires only ONE SubagentStop when the run ends. Inserting a second
+# 'running' row for the same agent_id left it unclosable (the stop closes
+# MIN(id) only) until cast-abandon-stale-runs flipped it to 'abandoned',
+# making `cast doctor` report a false "stopped without Status".
+# ---------------------------------------------------------------------------
+
+start_payload_for_id() {
+  python3 -c "
+import json, sys
+print(json.dumps({'agent_type': sys.argv[1], 'session_id': 'sess-dup', 'agent_id': sys.argv[2]}))
+" "$1" "$2"
+}
+
+@test "second SubagentStart for an agent_id that is still running → no second row" {
+  bash "$HOOK_SH" <<< "$(start_payload_for_id security aid-dup-1)"
+  bash "$HOOK_SH" <<< "$(start_payload_for_id security aid-dup-1)"
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE agent_id='aid-dup-1';"
+  assert_success
+  assert_output "1"
+}
+
+@test "SubagentStart after the previous run for that agent_id finished (resume) → new row" {
+  bash "$HOOK_SH" <<< "$(start_payload_for_id security aid-resume-1)"
+  sqlite3 "$CAST_DB_PATH" "UPDATE agent_runs SET status='DONE' WHERE agent_id='aid-resume-1';"
+  bash "$HOOK_SH" <<< "$(start_payload_for_id security aid-resume-1)"
+  run sqlite3 "$CAST_DB_PATH" "SELECT status FROM agent_runs WHERE agent_id='aid-resume-1' ORDER BY id;"
+  assert_success
+  assert_output "$(printf 'DONE\nrunning')"
+}
+
+@test "duplicate-start guard is per agent_id → a different running agent_id still gets its own row" {
+  bash "$HOOK_SH" <<< "$(start_payload_for_id security aid-a)"
+  bash "$HOOK_SH" <<< "$(start_payload_for_id security aid-b)"
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE status='running';"
+  assert_success
+  assert_output "2"
+}
+
+@test "two SubagentStarts with NO agent_id → two rows (no dedupe without an id)" {
+  local p
+  p="$(python3 -c "
+import json
+print(json.dumps({'agent_type': 'security', 'session_id': 'sess-noid'}))
+")"
+  bash "$HOOK_SH" <<< "$p"
+  bash "$HOOK_SH" <<< "$p"
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE agent='security';"
+  assert_success
+  assert_output "2"
+}

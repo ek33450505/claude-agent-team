@@ -278,3 +278,34 @@ _no_exec_prune() {
   assert_output --partial "stale: gone — gitdir points to a missing path; inspect before removing (never run git worktree prune)"
   refute_output --partial "safe to remove"
 }
+
+# ---------------------------------------------------------------------------
+# §5 — memory file re-verification is scheduled (step 7.5)
+# ---------------------------------------------------------------------------
+
+@test "maintenance: runs cast-verify-memories.py --apply and logs to memory-verify.log" {
+  # Stub verifier at the HOME-based path the script resolves (CAST_DIR/scripts).
+  mkdir -p "$HOME/.claude/scripts"
+  cat > "$HOME/.claude/scripts/cast-verify-memories.py" <<'PY'
+import sys
+print("STUB-VERIFY-RAN args=" + " ".join(sys.argv[1:]))
+PY
+
+  run env CAST_SCRIPTS_DIR="$REPO_DIR/scripts" bash "$SCRIPT" 2>/dev/null
+  assert_success
+
+  run cat "$HOME/.claude/logs/memory-verify.log"
+  assert_success
+  assert_output --partial "STUB-VERIFY-RAN args=--apply"
+}
+
+@test "maintenance: a failing cast-verify-memories.py does not abort the run" {
+  mkdir -p "$HOME/.claude/scripts"
+  printf 'import sys\nsys.exit(3)\n' > "$HOME/.claude/scripts/cast-verify-memories.py"
+
+  run env CAST_SCRIPTS_DIR="$REPO_DIR/scripts" bash "$SCRIPT" 2>/dev/null
+  assert_success
+  # The step logs after the (failed) verifier returns, proving `|| true` held.
+  run grep -c "Ran memory file re-verification" "$HOME/.claude/logs/maintenance.log"
+  assert_output "1"
+}
