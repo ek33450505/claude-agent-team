@@ -1249,7 +1249,7 @@ USAGE
       ;;
     *)
       _error "Unknown memory subcommand: $subcmd"
-      printf "  Use: cast memory search|list|verify|show|delete|forget|export|review|dream\n" >&2
+      printf "  Use: cast memory search|list|verify|show|delete|forget|export|dream\n" >&2
       return 1
       ;;
   esac
