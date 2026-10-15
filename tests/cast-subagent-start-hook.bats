@@ -346,3 +346,61 @@ print(json.dumps({'agent_type': 'security', 'session_id': 'sess-noid'}))
   assert_success
   assert_output "2"
 }
+
+# ---------------------------------------------------------------------------
+# Review snapshot (content-bound review gate): reviewers only
+# ---------------------------------------------------------------------------
+
+make_dirty_repo() {
+  REVIEW_REPO="$BATS_TEST_TMPDIR/rev-repo"
+  mkdir -p "$REVIEW_REPO"
+  git -C "$REVIEW_REPO" init -q
+  echo dirty > "$REVIEW_REPO/f.txt"
+}
+
+make_reviewer_payload() {
+  python3 -c "
+import json, sys
+print(json.dumps({'agent_type': sys.argv[1], 'session_id': 's-rev', 'agent_id': 'agent-rev1', 'cwd': sys.argv[2]}))
+" "$1" "$REVIEW_REPO"
+}
+
+@test "code-reviewer SubagentStart writes a start snapshot state file" {
+  make_dirty_repo
+  run bash "$HOOK_SH" <<< "$(make_reviewer_payload code-reviewer)"
+  assert_success
+  [ -f "$HOME/.claude/cast-state/review-snapshots/agent-rev1.json" ]
+  grep -q '"f.txt"' "$HOME/.claude/cast-state/review-snapshots/agent-rev1.json"
+}
+
+@test "non-reviewer SubagentStart writes no start snapshot" {
+  make_dirty_repo
+  run bash "$HOOK_SH" <<< "$(make_reviewer_payload backend-writer)"
+  assert_success
+  [ ! -e "$HOME/.claude/cast-state/review-snapshots/agent-rev1.json" ]
+}
+
+@test "empty session_id and no cwd in a reviewer payload: fields stay in their columns, snapshot from PWD" {
+  make_dirty_repo
+  local p
+  p="$(python3 -c "
+import json
+print(json.dumps({'agent_type': 'code-reviewer', 'agent_id': 'agent-rev2'}))
+")"
+  run bash -c 'cd "$1" && bash "$2" <<< "$3"' _ "$REVIEW_REPO" "$HOOK_SH" "$p"
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" "SELECT agent || '|' || IFNULL(session_id,'') || '|' || agent_id FROM agent_runs WHERE agent='code-reviewer';"
+  assert_output "code-reviewer||agent-rev2"
+  [ -f "$HOME/.claude/cast-state/review-snapshots/agent-rev2.json" ]
+}
+
+@test "CAST_HOOK_DIR from the environment is ignored for the snapshot helper" {
+  make_dirty_repo
+  local evil="$BATS_TEST_TMPDIR/evil"
+  mkdir -p "$evil"
+  printf 'import sys\nopen(%s, "w").write("pwned")\n' "'$evil/pwned'" > "$evil/cast_review_snapshot.py"
+  CAST_HOOK_DIR="$evil" run bash "$HOOK_SH" <<< "$(make_reviewer_payload code-reviewer)"
+  assert_success
+  [ ! -e "$evil/pwned" ]
+  [ -f "$HOME/.claude/cast-state/review-snapshots/agent-rev1.json" ]
+}

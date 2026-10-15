@@ -107,31 +107,24 @@ Threading a real `TASK_ID` (old Future Work item 3) does not fix this: the harne
 propagate `TASK_ID` into Agent-tool subagents, and even a correct `TASK_ID` still hits Root
 Cause 3 (no `artifact_written` event → empty `artifact_ids`).
 
-## Fix Applied (2026-07-22): session-scoped `agent_runs` fallback
+## Fix Applied (2026-07-22): session-scoped `agent_runs` fallback — RETIRED in v10.6.0
 
-`cast_check_approvals` now falls through to a **session-scoped `agent_runs` query** when the
-file-based state yields no approval for a required reviewer. `agent_runs` is populated
-automatically by the `SubagentStart`/`SubagentStop` hooks per dispatch — independent of any
-`TASK_ID` — so it records "a `code-reviewer` ran in this session" reliably and tamper-evidently.
+**RETIRED in v10.6.0.** The fallback approved on any fresh, branch-matched same-session
+`agent_runs` reviewer row whose status was `DONE`. That is run status, never the reviewer's
+verdict: 1523 of 1523 reviewer rows in 30 days were `DONE` (measured 2026-10-15), so it could not tell an approval
+from a rejection. `cast_check_approvals` is now file-based only (sticky rejections,
+`CAST_REVIEW_BLOCK_OK=1` hatch); ad-hoc (no `task_id`) commits are covered instead by the
+content-bound `scripts/cast-review-gate.py` (WARN-only in this release; it never blocks), which
+reads review snapshots: the SubagentStart hook records a baseline snapshot and the SubagentStop hook records the
+reviewer's decision parsed from its verdict line (only Stop parses the verdict). `CAST_APPROVAL_WINDOW_MIN` is no longer
+read and has no effect. History of the retired design follows.
 
-For each still-missing reviewer, the fallback selects the most-recent *decisive* row
-(`status IN (DONE, DONE_WITH_CONCERNS, completed, BLOCKED)`) for `(session_id, agent)` and applies:
-
-- **freshness window** — the row's `ended_at` must be within `CAST_APPROVAL_WINDOW_MIN` minutes
-  (default 120), checked in Python against a UTC cutoff (robust to `T`/space/`Z` timestamp variants);
-- **branch guard** — when both the row's `branch` and the current branch are known, they must
-  match (skipped when either is unknown, since `branch` is ~52% populated);
-- **status mapping** — `DONE`/`DONE_WITH_CONCERNS`/`completed` = approved; `BLOCKED` = rejected
-  (exit 2); `failed`/`abandoned`/`running`/absent = missing (exit 1).
-
-This is **strictly safer** than the file path it backstops: it survives reviewer truncation
-(the hook writes the row even when the agent hits `maxTurns` and never reaches its "Mandatory
-Final Step"), it is session-scoped (a prior session's reviews cannot leak in), and it captures
-the `BLOCKED` rejection signal the `batch-manual` sink discarded. Session id resolves via
-`CAST_SESSION_ID` → `CLAUDE_SESSION_ID`; with neither, the fallback fails **closed** (missing),
-never open. The file-based path runs first and is unchanged, so task-tracked `/orchestrate`
-runs are unaffected. Env knob: `CAST_APPROVAL_WINDOW_MIN`. Regression coverage:
-`tests/cast-events.bats` Section 7.
+`cast_check_approvals` fell through to a **session-scoped `agent_runs` query** when the
+file-based state yielded no approval for a required reviewer. `agent_runs` is populated
+automatically by the `SubagentStart`/`SubagentStop` hooks per dispatch, independent of any
+`TASK_ID`. It applied a freshness window, a branch guard, and a status mapping (`DONE`-family
+= approved, `BLOCKED` = rejected, anything else = missing), and failed closed with no session id.
+The file-based path ran first and was unchanged, so `/orchestrate` runs were unaffected.
 
 ---
 

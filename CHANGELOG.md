@@ -4,6 +4,49 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.6.0] — 2026-10-15
+
+### Added
+- **Reviewer runs now record what they reviewed.** Nothing tied a review to the code it covered: the commit approval
+  gate accepted a same-session reviewer run from a finished-status `agent_runs` row, without checking the reviewer's
+  decision. For `code-reviewer` and `security` runs, the SubagentStart hook snapshots the repo's dirty set (each path
+  with its raw working-tree blob, deletions as `DELETED`), and the SubagentStop hook snapshots it again and parses the
+  reviewer's final `Status:` and `Verdict:` lines (`review_snapshots` and `review_snapshot_files`, migration 037). An
+  APPROVE records only the paths whose blob was unchanged between the two snapshots; a BLOCKED verdict records every
+  regular-file and symlink path in the dirty set that either snapshot saw. Snapshots cover the dirty set only, so
+  clean tracked files the reviewer read are not recorded. The verdict parser is default-deny: anything other than one
+  strict `Verdict: APPROVE` next to a passing `Status:` line near the end of the report reads as BLOCKED. If a BLOCKED
+  verdict cannot be recorded per file, a repo-wide block row or a side marker under
+  `~/.claude/cast-state/review-unrecorded/` keeps it from being lost. A run whose roster identity cannot be verified
+  records nothing. Reviewer identity is verified against the roster type Claude Code records in the subagent's
+  sidecar; the dispatch name is only a pre-filter.
+- **`code-reviewer` and `security` end their report with the `Status:` line and then exactly `Verdict: APPROVE` or
+  `Verdict: BLOCKED`,** so the parser can read the verdict without parsing Markdown.
+- **A commit-time review gate, in WARN mode.** `scripts/cast-review-gate.py` checks every staged path: its staged blob
+  must equal its raw working-tree hash and match a `code-reviewer` APPROVE recorded for that repo, path and blob. A
+  recorded BLOCKED from either reviewer on the same blob wins over an APPROVE. A repo-wide block (a degraded BLOCKED
+  row or an unrecorded-review marker) holds until a later file-scoped review of that repo is recorded by either
+  reviewer. Staged submodule pointers count as unreviewed. `plugin/` and `cast-stats.json` count as derived, and are
+  not reviewed, in a repo that contains `agents/core/commit.md` and `scripts/cast_review_snapshot.py` (file presence
+  only, not a trust check). A `security` APPROVE never stands in for the `code-reviewer` APPROVE.
+  `CAST_UNREVIEWED_OK=<reason>` marks unreviewed paths as hatched (never blocked ones) and is recorded in `ack_events`
+  (best-effort, only when it hatches at least one path). The gate prints one line and writes one
+  `review_gate_decisions` row (migration 038) when the decision database is reachable. The commit agent runs it before
+  each commit it makes and copies the line into its Work Log; a commit made outside the agent is not checked. Nothing
+  blocks in this release; enforcement is a separate, later change.
+
+### Removed
+- **The session fallback of the commit approval gate.** `cast_check_approvals` approved a reviewer from a same-session
+  `agent_runs` row that was fresh (`CAST_APPROVAL_WINDOW_MIN`) and not on a different branch (the branch check applied
+  only when both branch names were known), with a DONE, DONE_WITH_CONCERNS or completed run status, but that status is
+  the run's, not the reviewer's verdict. Its sticky rejection goes with it: a same-session BLOCKED `agent_runs` row
+  now gives exit 1 (missing), not exit 2. Approvals now come only from a task's recorded review state; with no
+  `task_id` the commit agent takes its WARN path and the review gate above records the result.
+  `CAST_APPROVAL_WINDOW_MIN` is no longer read. `tests/cast-events-window-clamp.bats` is gone: its two cast-push
+  audit-log tests moved to `tests/cast-push.bats`, and its other 14 tested the removed fallback and were deleted.
+  `tests/cast-events.bats` drops 15 Tier 2 tests (7 `fallback:`, 8 `sticky:`) and gains 3 that pin the retirement; its
+  Tier 1 `CAST_REVIEW_BLOCK_OK` tests remain.
+
 ## [10.5.1] — 2026-10-15
 
 ### Fixed

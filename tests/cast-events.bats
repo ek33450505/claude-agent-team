@@ -271,22 +271,20 @@ json_field() {
 }
 
 # ---------------------------------------------------------------------------
-# 7. cast_check_approvals — session-scoped agent_runs fallback (Root Cause 4)
+# 7. cast_check_approvals — the session-scoped agent_runs fallback is RETIRED
+#    (v10.6.0). agent_runs.status is run status, never a reviewer verdict, so a
+#    same-session reviewer row must NOT satisfy (or reject) the gate. Ad-hoc
+#    commits are checked by scripts/cast-review-gate.py instead.
 # ---------------------------------------------------------------------------
-# Exercises the fallback that lets an ad-hoc Agent-tool dispatch's hook-populated
-# agent_runs row satisfy the commit gate when no file-based review record exists.
-# See docs/phase14-review-plumbing.md (Root Cause 4).
 
-# Build an isolated cast.db with an agent_runs table inside the temp HOME.
-_setup_fallback_db() {
+# Build an isolated cast.db inside the temp HOME.
+_setup_cast_db() {
   export CAST_DB_PATH="$HOME/.claude/cast.db"
   mkdir -p "$(dirname "$CAST_DB_PATH")"
   bash "$REPO_DIR/scripts/cast-db-init.sh" --db "$CAST_DB_PATH" >/dev/null 2>&1 || true
 }
 
 # Insert an agent_runs row. Args: session_id agent status ended_at_SQL_expr branch
-# Uses a parameterized sqlite3 INSERT (via python3) rather than shell-interpolated SQL,
-# matching the production query pattern in cast_check_approvals (code-reviewer finding).
 _insert_run() {
   python3 - "$1" "$2" "$3" "$4" "$5" "$CAST_DB_PATH" <<'PYEOF'
 import sqlite3, sys
@@ -305,137 +303,43 @@ finally:
 PYEOF
 }
 
-@test "fallback: session code-reviewer DONE (blank branch) approves (exit 0)" {
-  _setup_fallback_db
-  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
-  export CAST_SESSION_ID="sess-A"
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  assert_success
-}
-
-@test "fallback: session code-reviewer BLOCKED rejects (exit 2)" {
-  _setup_fallback_db
-  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now')" ""
-  export CAST_SESSION_ID="sess-A"
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  [ "$status" -eq 2 ]
-}
-
-@test "fallback: review in a DIFFERENT session is missing (exit 1)" {
-  _setup_fallback_db
-  _insert_run "sess-OTHER" "code-reviewer" "DONE" "datetime('now')" ""
-  export CAST_SESSION_ID="sess-A"
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  [ "$status" -eq 1 ]
-}
-
-@test "fallback: review older than the window is missing (exit 1)" {
-  _setup_fallback_db
-  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now','-5 hours')" ""
-  export CAST_SESSION_ID="sess-A"
-  export CAST_APPROVAL_WINDOW_MIN=120
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  [ "$status" -eq 1 ]
-}
-
-@test "fallback: branch mismatch is missing (exit 1)" {
-  _setup_fallback_db
-  cd "$REPO_DIR"
-  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" "definitely-not-current-branch-xyz"
-  export CAST_SESSION_ID="sess-A"
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  [ "$status" -eq 1 ]
-}
-
-@test "fallback: branch match approves (exit 0)" {
-  _setup_fallback_db
+@test "retired fallback: fresh same-session branch-matched code-reviewer DONE row with NO file state is missing (exit 1)" {
+  _setup_cast_db
   cd "$REPO_DIR"
   local cur; cur="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
   _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" "$cur"
   export CAST_SESSION_ID="sess-A"
   run cast_check_approvals "throwaway-task" "code-reviewer"
-  assert_success
+  [ "$status" -eq 1 ]
+  assert_output --partial "Missing approvals from: code-reviewer"
 }
 
-@test "fallback: no session id fails closed, missing (exit 1)" {
-  _setup_fallback_db
-  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
-  unset CAST_SESSION_ID
-  unset CLAUDE_SESSION_ID
+@test "retired fallback: a same-session BLOCKED row no longer rejects (exit 1, not 2)" {
+  _setup_cast_db
+  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
   run cast_check_approvals "throwaway-task" "code-reviewer"
   [ "$status" -eq 1 ]
 }
 
-# ---------------------------------------------------------------------------
-# 8. cast_check_approvals — sticky BLOCKED (Tier 2 fallback: a later DONE can
-#    never silently supersede an earlier BLOCKED). This is DELIBERATELY
-#    STRICTER than Tier 1's order-independent set-difference resolution
-#    (`rejections - approvals`, where a same-reviewer approval clears an
-#    earlier rejection) — Tier 2 never clears a BLOCKED via a later approval,
-#    because a self-dispatched `code-reviewer__<label>` shares the enclosing
-#    session_id and would otherwise silently overturn an orchestrator's
-#    rejection. See v10-sec2 dispatch.
-# ---------------------------------------------------------------------------
-
-@test "sticky: earlier BLOCKED + later DONE rejects (exit 2) — the bug itself" {
-  _setup_fallback_db
-  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
+@test "retired fallback: CAST_APPROVAL_WINDOW_MIN changes nothing (still exit 1)" {
+  _setup_cast_db
   _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
   export CAST_SESSION_ID="sess-A"
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  [ "$status" -eq 2 ]
+  local w
+  for w in 1 120 1440 999999 0 bogus; do
+    CAST_APPROVAL_WINDOW_MIN="$w" run cast_check_approvals "throwaway-task" "code-reviewer"
+    [ "$status" -eq 1 ]
+    assert_output --partial "Missing approvals from: code-reviewer"
+  done
 }
 
-@test "sticky: earlier BLOCKED + later __label DONE rejects (exit 2) — real-world self-review shape" {
-  _setup_fallback_db
-  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
-  _insert_run "sess-A" "code-reviewer__self" "DONE" "datetime('now')" ""
-  export CAST_SESSION_ID="sess-A"
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  [ "$status" -eq 2 ]
-}
-
-# The next three tests (freshness-window, branch-guard, CAST_REVIEW_BLOCK_OK=1)
-# are regression guards, not mutation-safe proofs of the sticky-BLOCKED fix —
-# each fixture's *newest* row is already DONE, so pre-fix most-recent-wins
-# resolution would pass them too. Keep them (they lock in real behavior), but
-# don't mistake a pass here for evidence the fix is doing anything; the two
-# "bug itself" tests above and the literal-1-convention test below are the
-# ones that actually discriminate (code-reviewer finding).
-@test "sticky: BLOCKED outside the freshness window does not stick; fresh DONE approves (exit 0)" {
-  _setup_fallback_db
-  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-5 hours')" ""
-  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
-  export CAST_SESSION_ID="sess-A"
-  export CAST_APPROVAL_WINDOW_MIN=120
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  assert_success
-}
-
-@test "sticky: BLOCKED on a different branch does not stick when the branch guard applies (exit 0)" {
-  _setup_fallback_db
-  cd "$REPO_DIR"
-  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" "definitely-not-current-branch-xyz"
-  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
-  export CAST_SESSION_ID="sess-A"
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  assert_success
-}
-
-@test "sticky: CAST_REVIEW_BLOCK_OK=1 suppresses the sticky block (exit 0)" {
-  _setup_fallback_db
-  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
-  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
-  export CAST_SESSION_ID="sess-A"
-  export CAST_REVIEW_BLOCK_OK=1
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  assert_success
-}
 
 # ---------------------------------------------------------------------------
-# 8a. The hatch must RECORD the bypass, not just permit it. `exit 0` alone
-#     cannot distinguish "hatch recorded the bypass" from "hatch silently
-#     dropped the record" — assert the ack_events row directly.
+# 8. ack_events helpers for the Tier 1 hatch tests in section 9. The hatch must
+#    RECORD the bypass, not just permit it. `exit 0` alone cannot distinguish
+#    "hatch recorded the bypass" from "hatch silently dropped the record" —
+#    assert the ack_events row directly.
 # ---------------------------------------------------------------------------
 
 # Guard against a vacuous pass: confirm ack_events actually exists before any
@@ -484,65 +388,12 @@ finally:
 PYEOF
 }
 
-@test "sticky: CAST_REVIEW_BLOCK_OK=1 is RECORDED in ack_events, not just permitted" {
-  _setup_fallback_db
-  _assert_ack_events_table_exists
-
-  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
-  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
-  export CAST_SESSION_ID="sess-A"
-  export CAST_REVIEW_BLOCK_OK=1
-
-  local before after
-  before=$(_ack_events_count)
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  assert_success
-  after=$(_ack_events_count)
-  [ "$((after - before))" -eq 1 ]
-
-  run _ack_events_latest
-  assert_output "CAST_REVIEW_BLOCK_OK|cast-events.sh|0"
-}
-
-@test "sticky: WITHOUT the hatch, no bypass row is added to ack_events (control)" {
-  _setup_fallback_db
-  _assert_ack_events_table_exists
-
-  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
-  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
-  export CAST_SESSION_ID="sess-A"
-  unset CAST_REVIEW_BLOCK_OK
-
-  local before after
-  before=$(_ack_events_count)
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  [ "$status" -eq 2 ]
-  after=$(_ack_events_count)
-  [ "$after" -eq "$before" ]
-}
-
-@test "sticky: CAST_REVIEW_BLOCK_OK=true / =10 do NOT suppress the block (literal-1 convention, exit 2)" {
-  _setup_fallback_db
-  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
-  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
-  export CAST_SESSION_ID="sess-A"
-
-  export CAST_REVIEW_BLOCK_OK=true
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  [ "$status" -eq 2 ]
-
-  export CAST_REVIEW_BLOCK_OK=10
-  run cast_check_approvals "throwaway-task" "code-reviewer"
-  [ "$status" -eq 2 ]
-}
-
 # ---------------------------------------------------------------------------
 # 9. cast_derive_state / cast_check_approvals — Tier 1 sticky rejection
-#    (v10-sec2 follow-up). Tier 1 (file-based state from cast_derive_state)
-#    is resolved BEFORE Tier 2 and short-circuits on `not missing`, so it had
-#    the SAME defect Tier 2 was hardened against in section 8: a same-
-#    reviewer approval cleared an earlier rejection via an ORDER-INDEPENDENT
-#    set difference (`rejections = set(rejections) - set(approvals)`).
+#    (v10-sec2 follow-up). File-based state from cast_derive_state is the only
+#    resolution path (the agent_runs fallback was retired in v10.6.0). A same-
+#    reviewer approval used to clear an earlier rejection via an ORDER-
+#    INDEPENDENT set difference (`rejections = set(rejections) - set(approvals)`).
 #
 #    ⚠ Collision note (v10-sec2 follow-up #2): cast_write_review's filename
 #    timestamp is second-granularity, so two same-artifact/same-reviewer
@@ -648,7 +499,7 @@ PYEOF
 }
 
 @test "Tier 1 hatch: CAST_REVIEW_BLOCK_OK=1 bypass is RECORDED in ack_events" {
-  _setup_fallback_db
+  _setup_cast_db
   _assert_ack_events_table_exists
 
   cast_emit_event "task_created" "orchestrator" "tier1-hatch-4" "" "" "" ""
