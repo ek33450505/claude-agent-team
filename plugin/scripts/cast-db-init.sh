@@ -889,6 +889,45 @@ ACK_EVENTS_TABLE
   _columns_added=1
 fi
 
+# review_snapshots + review_snapshot_files: content-bound review gate record (writer:
+# scripts/cast_review_snapshot.py record(); v10.6.0 U1a -- library + schema only, no caller
+# wired yet). One review_snapshots row per reviewer run; one review_snapshot_files row per
+# path whose blob was identical at the reviewer's start and stop. created_at uses
+# datetime('now') (SPACE format), like ack_events -- see scripts/migrations/037_review_snapshots.sql.
+# Guards use `grep -qw` so each table name matches exactly (no prefix collision).
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -qw "review_snapshots"; then
+  sqlite3 "$DB_PATH" <<'REVIEW_SNAPSHOTS_TABLE'
+CREATE TABLE IF NOT EXISTS review_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT,
+    agent_id TEXT,
+    reviewer TEXT NOT NULL,
+    repo_root TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK(decision IN ('APPROVE','BLOCKED')),
+    scope TEXT NOT NULL DEFAULT 'files' CHECK(scope IN ('files','repo')),
+    started_at TEXT,
+    ended_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_review_snapshots_repo_root ON review_snapshots(repo_root);
+CREATE INDEX IF NOT EXISTS idx_review_snapshots_created_at ON review_snapshots(created_at);
+REVIEW_SNAPSHOTS_TABLE
+  _columns_added=1
+fi
+
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -qw "review_snapshot_files"; then
+  sqlite3 "$DB_PATH" <<'REVIEW_SNAPSHOT_FILES_TABLE'
+CREATE TABLE IF NOT EXISTS review_snapshot_files (
+    snapshot_id INTEGER NOT NULL REFERENCES review_snapshots(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    blob TEXT NOT NULL,
+    PRIMARY KEY (snapshot_id, path)
+);
+CREATE INDEX IF NOT EXISTS idx_review_snapshot_files_path_blob ON review_snapshot_files(path, blob);
+REVIEW_SNAPSHOT_FILES_TABLE
+  _columns_added=1
+fi
+
 # agent_hallucinations: claim verification telemetry (writer: cast-hallucination-guard.sh)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "agent_hallucinations"; then
   sqlite3 "$DB_PATH" <<'AGENT_HALLUCINATIONS_TABLE'

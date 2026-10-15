@@ -274,6 +274,20 @@
       "notes": "NEW v10 (migration 034). A row means the op was PERMITTED, not that it ran (PreToolUse). Recording is gated on the hatch actually averting a block — a harmless hatched command records nothing. `value` is USER-SUPPLIED FREE TEXT when CAST_HATCH_REASON is set (sanitized, <=500 chars); never render it as evidence of what executed. has_reason=0 iff value is a bare 1/true/yes. Capped at 8 records per command; overflow emits ONE sentinel row with variable='CAST_HATCH_RECORD_CAP' — exclude it from hatch counts. created_at is SQLite space format ('YYYY-MM-DD HH:MM:SS'), not ISO-T/Z. Reader: cast-ask-index.py:330 (kind='hatch')."
     },
     {
+      "table": "review_snapshots",
+      "writers": ["cast_review_snapshot.py:395"],
+      "cadence": "per_event",
+      "status": "live",
+      "notes": "NEW v10.6.0 U1a (migration 037). One row per reviewer run (decision APPROVE|BLOCKED = parsed Verdict line AND passing Status). Library + schema only: record() has no caller until U1b wires SubagentStart/Stop. created_at is SQLite space format; started_at/ended_at are caller-supplied."
+    },
+    {
+      "table": "review_snapshot_files",
+      "writers": ["cast_review_snapshot.py:400"],
+      "cadence": "per_event",
+      "status": "live",
+      "notes": "NEW v10.6.0 U1a (migration 037). One row per path whose git blob sha was identical at the reviewer's start and stop (blob = sha or 'DELETED'); written in the same transaction as its review_snapshots parent. No caller until U1b."
+    },
+    {
       "table": "agent_runs_daily",
       "writers": ["cast-db-rollup.py:172", "cast-db-rollup.py:206"],
       "cadence": "nightly",
