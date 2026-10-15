@@ -103,7 +103,7 @@ bash ~/.claude/scripts/cast-memory-write.sh "security" "feedback" "<finding-name
 
 ## Mandatory Final Step — Approval Marker (orchestrated dispatch only)
 
-Write the approval marker to the CAST state store **only when you are running under orchestration** — that is, when `TASK_ID` is set. In ad-hoc / manual (non-orchestrated) dispatch, `TASK_ID` is unset: do **NOT** write the marker. A reviewer that records its own "approved" verdict with no separate approver trips the harness self-approval guard, and the commit agent's security gate has a session-scoped `agent_runs` fallback that does not need this record. In that case, state your verdict on the final verdict line described in the Completion Report. Follow the Verdict/Status coupling in the Completion Report section.
+Write the approval marker to the CAST state store **only when you are running under orchestration** — that is, when `TASK_ID` is set. In ad-hoc / manual (non-orchestrated) dispatch, `TASK_ID` is unset: do **NOT** write the marker. A reviewer that records its own "approved" verdict with no separate approver trips the harness self-approval guard, and ad-hoc commits are instead checked by `scripts/cast-review-gate.py` in WARN mode only (it never blocks in this release), which reads the review snapshot the SubagentStop hook records from your verdict line — it does not need this record. A security BLOCKED verdict is binding there; a security APPROVE never substitutes for the code-reviewer APPROVE. In that case, state your verdict on the final verdict line described in the Completion Report. Follow the Verdict/Status coupling in the Completion Report section.
 
 Before returning your Status block:
 

@@ -503,34 +503,26 @@ PYEOF
 # Usage: cast_check_approvals <task_id> <required_reviewer1> [required_reviewer2 ...]
 # Returns 0 if all required approvals present, 1 if missing, 2 if any unanswered rejections
 #
-# Two-tier resolution per required reviewer, BOTH sticky by default (v10-sec2 Tier1 fix):
-#   1. File-based state (cast_derive_state): a recorded approved/rejected decision keyed to
-#      the task's artifact_ids. This is the DB-tracked /orchestrate path; tried first.
-#      cast_derive_state resolves each reviewer's decisions in true chronological order (each
-#      review's own `timestamp` field) and is STICKY: any 'rejected' decision, ever, wins — a
-#      later same-reviewer approval no longer clears it. (Was previously an ORDER-INDEPENDENT
-#      set difference, `rejections = set(rejections) - set(approvals)`, that cleared a
-#      rejection via a same-reviewer approval regardless of which event came first — fixed
-#      here, mirroring Tier 2's sticky-BLOCKED semantics below.)
-#   2. Session-scoped agent_runs fallback (when the file path yields no approval): all
-#      same-session agent_runs rows for that reviewer that are fresh (within
-#      CAST_APPROVAL_WINDOW_MIN minutes, default 120) and branch-matched. ANY eligible
-#      BLOCKED row is STICKY — it rejects regardless of a later DONE. The reason: subagents
-#      share the enclosing session_id, so a self-dispatched `code-reviewer__<label>` re-review
-#      could otherwise silently overturn an orchestrator's earlier rejection just by running
-#      again and reporting DONE.
-#      Covers ad-hoc Agent-tool dispatches that never thread a TASK_ID or emit
-#      artifact_written events. Fails CLOSED (missing) when no session id is resolvable.
-#      See docs/phase14-review-plumbing.md (Root Cause 4).
+# Resolution per required reviewer is file-based and STICKY (v10-sec2 Tier1 fix):
+#   File-based state (cast_derive_state): a recorded approved/rejected decision keyed to
+#   the task's artifact_ids (the DB-tracked /orchestrate path).
+#   cast_derive_state resolves each reviewer's decisions in true chronological order (each
+#   review's own `timestamp` field) and is STICKY: any 'rejected' decision, ever, wins — a
+#   later same-reviewer approval no longer clears it. (Was previously an ORDER-INDEPENDENT
+#   set difference, `rejections = set(rejections) - set(approvals)`, that cleared a
+#   rejection via a same-reviewer approval regardless of which event came first.)
 #
-# Escape hatch (both tiers): CAST_REVIEW_BLOCK_OK=1 (the literal string "1") reverts a
-# reviewer to pre-fix newest-decision-wins resolution — order-DEPENDENT, using
-# cast_derive_state's `newest_decision` map for Tier 1 and each row's `ended_at` for Tier 2 —
-# and records the bypass via cast_ack.py on a best-effort basis, as an EXTERNAL subprocess
-# (see _record_hatch_ack in the heredoc below, not an in-process `from cast_ack import
-# record_ack` — that pattern is a security finding: `except Exception` does not catch
-# SystemExit, so a same-named module planted on a CWD-derived sys.path could kill this whole
-# gate process). This is the recorded way out, not a silent one.
+# The session-scoped agent_runs fallback (formerly "Tier 2") was retired in v10.6.0:
+# agent_runs.status is run status, not a reviewer verdict. Ad-hoc (no task_id) commits are
+# checked by scripts/cast-review-gate.py instead. See docs/phase14-review-plumbing.md.
+#
+# Escape hatch: CAST_REVIEW_BLOCK_OK=1 (the literal string "1") reverts a reviewer to
+# pre-fix newest-decision-wins resolution — order-DEPENDENT, using cast_derive_state's
+# `newest_decision` map — and records the bypass via cast_ack.py on a best-effort basis, as
+# an EXTERNAL subprocess (see _record_hatch_ack in the heredoc below, not an in-process
+# `from cast_ack import record_ack` — that pattern is a security finding: `except Exception`
+# does not catch SystemExit, so a same-named module planted on a CWD-derived sys.path could
+# kill this whole gate process). This is the recorded way out, not a silent one.
 cast_check_approvals() {
   local task_id="$1"
   shift
@@ -542,12 +534,6 @@ cast_check_approvals() {
   local state_file
   state_file="$(_cast_state_file "$task_id")"
 
-  # Session + branch context for the agent_runs fallback (best-effort; empty when unknown)
-  local sid="${CAST_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
-  local cur_branch
-  cur_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
-  local window_min="${CAST_APPROVAL_WINDOW_MIN:-120}"
-  local db_path="${CAST_DB_PATH:-$HOME/.claude/cast.db}"
   # Sticky-BLOCK escape hatch (literal "1" only, checked in Python below).
   local review_block_ok="${CAST_REVIEW_BLOCK_OK:-}"
   # No BASH_SOURCE-derived script_dir here: the bypass-ack call below shells
@@ -557,21 +543,13 @@ cast_check_approvals() {
   # BASH_SOURCE-based resolution mechanism threaded in alongside that would
   # be the redundant-private-path-model this whole change exists to remove.
 
-  python3 -I - "$state_file" "$sid" "$cur_branch" "$window_min" "$db_path" "$review_block_ok" "${required[@]}" <<'PYEOF'
-import json, os, sqlite3, subprocess, sys
-from datetime import datetime, timedelta, timezone
+  python3 -I - "$state_file" "$review_block_ok" "${required[@]}" <<'PYEOF'
+import json, os, subprocess, sys
 
 state_file = sys.argv[1]
-session_id = sys.argv[2]
-cur_branch = sys.argv[3]
-try:
-    window_min = int(sys.argv[4])
-except (ValueError, IndexError):
-    window_min = 120
-window_min = min(max(window_min, 1), 1440)   # clamp: 1-min floor, 24h ceiling — an unbounded window lets a stale approval satisfy the gate
-db_path = sys.argv[5]
-review_block_ok = sys.argv[6] == "1"   # literal "1" only — "true"/"yes"/"10" do NOT qualify
-required = sys.argv[7:]
+review_block_ok = sys.argv[2] == "1"   # literal "1" only — "true"/"yes"/"10" do NOT qualify
+required = sys.argv[3:]
+
 
 def _record_hatch_ack():
     """Best-effort audit record of a CAST_REVIEW_BLOCK_OK bypass, run as an
@@ -606,7 +584,7 @@ try:
     rejections = set(state.get("rejections", []))
     newest_decision = state.get("newest_decision", {}) or {}
 except Exception:
-    pass  # no/unreadable state file → empty, fall through to the fallback
+    pass  # no/unreadable state file → empty, so every required reviewer is missing
 
 if review_block_ok and rejections:
     # Escape hatch (CAST_REVIEW_BLOCK_OK=1): revert Tier 1 to pre-fix
@@ -622,7 +600,7 @@ if review_block_ok and rejections:
         approvals = approvals | tier1_hatch_suppressed
         _record_hatch_ack()
 
-# A recorded rejection is authoritative — never overridden by the fallback.
+# A recorded rejection is authoritative.
 if rejections:
     print(f"REJECTED by: {', '.join(sorted(rejections))}", file=sys.stderr)
     sys.exit(2)
@@ -632,109 +610,8 @@ if not missing:
     print("All required approvals present")
     sys.exit(0)
 
-# ── Tier 2: session-scoped agent_runs fallback for still-missing reviewers ────
-# Requires a session id to scope safely; without one we cannot tell this session's
-# reviews from any other, so we fail CLOSED (missing), never open.
-if not session_id:
-    print(f"Missing approvals from: {', '.join(sorted(missing))}", file=sys.stderr)
-    sys.exit(1)
-
-def parse_ts(s):
-    # Tolerant: accept 'T' or space separators, drop fractional/'Z' beyond 19 chars.
-    s = (s or "").strip().replace("T", " ")[:19]
-    try:
-        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
-cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_min)
-REJECT = {"BLOCKED"}  # decisive statuses selected in SQL; everything non-REJECT here = approve
-
-still_missing, fallback_rejections = [], []
-hatch_suppressed_block = False
-try:
-    conn = sqlite3.connect(db_path, timeout=5)
-    try:
-        for r in missing:
-            # Match the bare agent name OR its `<agent>__<label>` dispatch-naming
-            # variant (working-conventions.md dispatch-naming rule) — LIKE '_' is a
-            # single-char wildcard, so escape the literal pattern and anchor on a
-            # literal "__" separator (never a bare "<agent>%" prefix, which would
-            # also match an unrelated agent like "code-reviewer2").
-            like_pattern = (
-                r.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-                + '\\_\\_%'
-            )
-            # Fetch ALL matching rows, newest first (not just the newest one) —
-            # a recorded BLOCKED must be STICKY: a later same-session DONE (e.g.
-            # a self-dispatched re-review) can never silently supersede it. Each
-            # row still passes through the same freshness/branch filters as
-            # before, evaluated per row rather than on a single fetched row.
-            rows = conn.execute(
-                "SELECT status, branch, ended_at FROM agent_runs "
-                "WHERE session_id=? AND (agent=? OR agent LIKE ? ESCAPE '\\') "
-                "AND ended_at IS NOT NULL AND ended_at != '' "
-                "AND status IN ('DONE','DONE_WITH_CONCERNS','completed','BLOCKED') "
-                "ORDER BY replace(ended_at, 'T', ' ') DESC",
-                (session_id, r, like_pattern),
-            ).fetchall()
-            if not rows:
-                still_missing.append(r); continue
-            eligible = []  # statuses of rows surviving the filters below, newest-first
-            for row_status, row_branch, row_ended_at in rows:
-                row_status = (row_status or "").strip()
-                row_branch = (row_branch or "").strip()
-                ts = parse_ts(row_ended_at)
-                # Freshness window (UTC-to-UTC; robust to timestamp-format variants).
-                if ts is None or ts < cutoff:
-                    continue
-                # Branch guard: only when both branches are known and differ.
-                if cur_branch and row_branch and row_branch != cur_branch:
-                    continue
-                eligible.append(row_status)
-            if not eligible:
-                still_missing.append(r); continue
-            sticky_reject = any(s in REJECT for s in eligible)
-            if review_block_ok:
-                # Escape hatch (CAST_REVIEW_BLOCK_OK=1): revert this reviewer to
-                # pre-fix most-recent-wins resolution. `eligible` preserves the
-                # SQL's DESC-by-ended_at order, so eligible[0] is the newest
-                # eligible row — deciding from it alone reproduces the old
-                # single-row LIMIT 1 behavior.
-                if eligible[0] in REJECT:
-                    fallback_rejections.append(r)
-                elif sticky_reject:
-                    # The hatch is the only reason this reviewer wasn't rejected:
-                    # an older eligible row IS blocked, so sticky logic (below)
-                    # would have rejected it. Record that the hatch fired.
-                    hatch_suppressed_block = True
-            elif sticky_reject:
-                fallback_rejections.append(r)
-            # else: no eligible BLOCKED row → DONE / DONE_WITH_CONCERNS / completed → satisfied
-    finally:
-        conn.close()
-except Exception as e:
-    # DB unavailable/locked → fail CLOSED (do not spuriously approve).
-    print(f"Missing approvals from: {', '.join(sorted(missing))} "
-          f"(agent_runs fallback unavailable: {e})", file=sys.stderr)
-    sys.exit(1)
-
-if hatch_suppressed_block:
-    # Best-effort audit record of the bypass (only reached when the hatch
-    # actually overturned a would-be sticky BLOCK). See _record_hatch_ack's
-    # docstring above for why this shells out instead of importing cast_ack
-    # in-process.
-    _record_hatch_ack()
-
-if fallback_rejections:
-    print(f"REJECTED by: {', '.join(sorted(set(fallback_rejections)))} (session agent_runs)",
-          file=sys.stderr)
-    sys.exit(2)
-if still_missing:
-    print(f"Missing approvals from: {', '.join(sorted(set(still_missing)))}", file=sys.stderr)
-    sys.exit(1)
-print(f"All required approvals present (session-scoped agent_runs fallback, window={window_min}m)")
-sys.exit(0)
+print(f"Missing approvals from: {', '.join(sorted(missing))}", file=sys.stderr)
+sys.exit(1)
 PYEOF
 }
 

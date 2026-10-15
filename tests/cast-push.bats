@@ -207,3 +207,40 @@ SHIM
   assert_success
   assert_output --partial "pushed and verified"
 }
+
+# ---------------------------------------------------------------------------
+# T2.3 — cast-push.sh escape-hatch audit log
+# ---------------------------------------------------------------------------
+# cast-push.sh performs a real `git push`, so rather than exercise the whole
+# script these tests source the extracted cast_push_write_audit_log()
+# function (scripts/cast-push-audit-log.sh) directly and call it — the exact
+# guarded log-append logic cast-push.sh invokes right after PUSH_SHA is
+# captured, so it fires regardless of which push branch — set-upstream vs
+# plain — is taken.
+
+@test "cast-push audit log: append writes one tab-separated line with branch and SHA" {
+  local branch="feature/example"
+  local sha="deadbeefcafefeed0000000000000000000000"
+  local log="$HOME/.claude/logs/cast-push-audit.log"
+
+  # shellcheck source=/dev/null
+  source "$REPO_DIR/scripts/cast-push-audit-log.sh"
+  cast_push_write_audit_log "$branch" "$sha"
+
+  [ -f "$log" ]
+  [ "$(wc -l <"$log" | tr -d ' ')" -eq 1 ]
+  run cat "$log"
+  assert_output --partial "$branch"
+  assert_output --partial "$sha"
+}
+
+@test "cast-push audit log: guarded append never fails even if the log dir is unwritable" {
+  local log_dir="$HOME/.claude/logs"
+  mkdir -p "$log_dir"
+  chmod 000 "$log_dir"
+
+  run bash -c 'source "$1/scripts/cast-push-audit-log.sh" && cast_push_write_audit_log "br" "sha"' _ "$REPO_DIR"
+  assert_success
+
+  chmod 755 "$log_dir"
+}

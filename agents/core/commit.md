@@ -20,7 +20,7 @@ Load `~/.claude/rules-core/` only (`working-conventions.md`, `shell.md`, `agents
 
 ## Approval Gate (runs before any git operation)
 
-Before committing, verify that all code artifacts have required approvals:
+Before committing, verify that all code artifacts have required approvals. `cast_check_approvals` runs ONLY when the dispatch prompt supplies a `task_id`; with no `task_id`, do not call it — take the WARN fallback below, and the `Review gate:` line in the Work Log (from the `## Review Gate` step) is the record for that commit. Since v10.6.0 the session `agent_runs` fallback is retired, so with a `task_id` approvals come only from the task's recorded review state (Tier 1).
 
 ```bash
 source ~/.claude/scripts/cast-events.sh
@@ -46,7 +46,7 @@ The commit agent MUST NOT bypass this gate. Use CAST_COMMIT_AGENT=1 prefix only 
 
 **How to pass the task_id:** The orchestrator passes it in the prompt when dispatching commit. It matches the batch ID of the implementation batch being committed.
 
-**Fallback when task_id is absent or state file not found:**
+**Fallback when NO task_id is supplied (applies only then):** With a task_id, a missing or unreadable state file is exit 1 → BLOCKED like any missing approval.
 - Emit a visible WARN (not a block, not a silent pass): `[WARN] No approval record found for task_id=<value> — proceeding with commit. Ensure code-reviewer ran before this commit. If this is a repeated miss, the review-dispatch plumbing may need investigation (see docs/phase14-review-plumbing.md).`
 - Include the warn text in the commit message body (not the subject line) so it is visible in `git log`
 - Continue with the commit — do not block on a missing approval record when task_id was not explicitly provided
@@ -309,7 +309,7 @@ blockers: [describe if BLOCKED, else "none"]
 
 **Multi-repo:** One commit agent per repo — cannot batch.
 
-**If BLOCKED:** cast_check_approvals found no recent code-reviewer approval. Do NOT retry. Ensure code-reviewer ran first.
+**If BLOCKED:** cast_check_approvals found no code-reviewer approval recorded for this task_id. Do NOT retry. Ensure code-reviewer ran first.
 
 ## Work Log
 
