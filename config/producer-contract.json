@@ -18,19 +18,19 @@
     },
     {
       "table": "agent_truncations",
-      "writers": ["cast_subagent_stop.py:2071"],
+      "writers": ["cast_subagent_stop.py:2111"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "agent_protocol_violations",
-      "writers": ["cast_subagent_stop.py:2602"],
+      "writers": ["cast_subagent_stop.py:2642"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "quality_gates",
-      "writers": ["cast_subagent_stop.py:2338", "orchestrate-dispatch.py:138", "write-guards.py:172"],
+      "writers": ["cast_subagent_stop.py:2378", "orchestrate-dispatch.py:138", "write-guards.py:172"],
       "cadence": "per_agent_run",
       "status": "live",
       "notes": "gate_type populated from 2026-07-03"
@@ -56,7 +56,7 @@
     },
     {
       "table": "routing_events",
-      "writers": ["cast-user-prompt-hook.sh:169", "cast_subagent_stop.py:2687", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
+      "writers": ["cast-user-prompt-hook.sh:169", "cast_subagent_stop.py:2727", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -87,7 +87,7 @@
     },
     {
       "table": "completeness_events",
-      "writers": ["cast_subagent_stop.py:2133"],
+      "writers": ["cast_subagent_stop.py:2173"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -144,7 +144,7 @@
     },
     {
       "table": "incidents",
-      "writers": ["cast_subagent_stop.py:2855", "cast-abandon-stale-runs.py:525"],
+      "writers": ["cast_subagent_stop.py:2895", "cast-abandon-stale-runs.py:525"],
       "cadence": "per_event",
       "status": "live"
     },

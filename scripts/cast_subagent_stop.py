@@ -46,6 +46,29 @@ def _log_fail(stage: str, exit_code: int, msg: str, session_id: Optional[str] = 
             pass
 
 
+# ── Shared monotonic hook deadline ───────────────────────────────────────────
+# The SubagentStop hook is killed at 15 s (managed-settings.d/30-hooks-session.json) and
+# that clock also covers the wrapper's earlier --gate-only pass plus interpreter startup,
+# so the full pass gets 12 s. Every git/subprocess call clamps its own cap to what is left
+# (min(per_call_cap, _remaining())) so N hung calls can no longer sum past the kill; a stage
+# that would START after the deadline is skipped by run_stage (stage17_tail excepted: the
+# wrapper parses its tail block). main() sets the deadline; unset (unit tests that call a
+# stage directly) means unbounded, i.e. each call keeps its own cap.
+_HOOK_BUDGET_S = 12.0
+_HOOK_DEADLINE: Optional[float] = None
+# stage17_tail is cheap and required (the wrapper evals its __CAST_TAIL__ block);
+# stage8b self-clamps and, with no budget left, takes the git-free degraded-row path, so a
+# BLOCKED review verdict is still recorded even if stages 0-1 overran.
+_DEADLINE_EXEMPT_STAGES = frozenset({"stage17_tail", "stage8b_review_snapshot"})
+
+
+def _remaining() -> float:
+    """Seconds left on the hook deadline (>= 0); +inf when no deadline is set."""
+    if _HOOK_DEADLINE is None:
+        return float("inf")
+    return max(0.0, _HOOK_DEADLINE - time.monotonic())
+
+
 def _log_error(msg: str) -> None:
     """Append a structured line to ~/.claude/logs/hook-errors.log (never raises).
 
@@ -1072,6 +1095,9 @@ def run_stage(name: str, fn, ctx: Ctx) -> None:
     A stage crash is recorded and swallowed so every later stage still runs — this
     restores the per-heredoc `|| true` isolation the monolithic hook gave for free.
     """
+    if name not in _DEADLINE_EXEMPT_STAGES and _HOOK_DEADLINE is not None and _remaining() <= 0:
+        _log_fail(name, -1, "skipped: hook deadline", ctx.session_id)
+        return
     try:
         fn(ctx)
     except SystemExit:
@@ -1730,8 +1756,15 @@ _GIT_SAFE_MOD = None  # None=unattempted, False=load failed, module=loaded
 
 
 def _git_safe_run(repo_dir: str, args: list, timeout: float = 5.0):
-    """cast_git_safe.run(repo_dir, args, timeout); rc 3 CompletedProcess if it can't load."""
+    """cast_git_safe.run(repo_dir, args, timeout); rc 3 CompletedProcess if it can't load.
+
+    The per-call timeout is clamped to the shared hook deadline; once that is spent git is
+    not run at all (rc 124, the same "unknown" every caller already handles).
+    """
     global _GIT_SAFE_MOD
+    timeout = min(timeout, _remaining())
+    if timeout <= 0:
+        return subprocess.CompletedProcess(["git", *args], 124, "", "hook deadline spent")
     if _GIT_SAFE_MOD is None:
         try:
             import importlib.util as _ilu
@@ -1828,7 +1861,11 @@ def stage8b_review_snapshot(ctx: Ctx) -> None:
         decision = crs.decide(crs.parse_verdict(text), ctx.gate_match)
         _payload_cwd = os.path.expanduser((ctx.data.get("cwd") or "").strip()) if isinstance(ctx.data, dict) else ""
         repo_dir = _payload_cwd if _payload_cwd and os.path.isdir(_payload_cwd) else os.getcwd()
-        budget_end = time.monotonic() + _REVIEW_SNAPSHOT_BUDGET_S  # one budget for all git work
+        # One budget for all git work, clamped to the shared hook deadline. When it is spent
+        # resolve_repo_root skips git and returns the realpath(repo_dir) fallback, and
+        # take_snapshot returns None -- so a BLOCKED verdict still lands as a degraded
+        # scope='repo' row (and APPROVE stays unrecorded, fail-closed).
+        budget_end = time.monotonic() + min(_REVIEW_SNAPSHOT_BUDGET_S, _remaining())
         repo_root = crs.resolve_repo_root(repo_dir, timeout=budget_end - time.monotonic())
         start = crs.load_start(crs.default_state_dir(), ctx.agent_id,
                                session_id=ctx.session_id or None, reviewer=reviewer)
@@ -1918,12 +1955,15 @@ def _redact_excerpt_verbose(text: str):
             return mod.redact_regex(text, entities, "redact"), None
         except Exception as exc:
             last_exc = type(exc).__name__
+    _sub_timeout = min(5.0, _remaining())
+    if _sub_timeout <= 0:
+        return None, "HookDeadline"  # fail-closed: callers store the marker, never the original
     try:
         res = subprocess.run(
             ["python3", "-I", os.path.join(_HOOK_DIR, "cast-redact.py"), "--engine", "regex"],
             input=text.encode(),
             capture_output=True,
-            timeout=5,
+            timeout=_sub_timeout,
         )
         if res.returncode == 0:
             return json.loads(res.stdout.decode()).get("redacted_text", text), None
@@ -3124,8 +3164,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     written before any slow telemetry stage (stage 9 can take 50-100 s) can be killed
     by the hook timeout. The full pass (no flag) is unchanged.
     """
+    global _HOOK_DEADLINE
     args = sys.argv[1:] if argv is None else argv
     gate_only = "--gate-only" in args
+    # Armed for the full pass only, and always disarmed on exit so an in-process caller
+    # (tests, a later main()) never inherits a stale deadline.
+    _HOOK_DEADLINE = None if gate_only else time.monotonic() + _HOOK_BUDGET_S
+    try:
+        return _run_pass(args, gate_only)
+    finally:
+        _HOOK_DEADLINE = None
+
+
+def _run_pass(args: List[str], gate_only: bool) -> int:
+    """The body of main(): parse once, then either emit the gate tail or run every stage."""
     # --stdin: the wrapper pipes the payload on stdin (no env/argv size cap). Without
     # the flag parse_input falls back to the CAST_STOP_INPUT env var.
     stdin_raw = _read_stdin_payload() if "--stdin" in args else None
@@ -3155,6 +3207,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     run_stage("stage0_fast_write", stage0_fast_write, ctx)
     run_stage("stage1_event_file", stage1_event_file, ctx)
+    # Critical review record, run before the slow/git-heavy stages so they cannot eat its
+    # share of the hook deadline. Reads only parse_input state (is_exempt, agent_id/name,
+    # roster_type, final_text, gate_match, data, db_path), nothing stages 2-8 set.
+    run_stage("stage8b_review_snapshot", stage8b_review_snapshot, ctx)
     run_stage("stage2_transcript_cost", stage2_transcript_cost, ctx)
     run_stage("stage3_dispatch_decisions", stage3_dispatch_decisions, ctx)
     run_stage("stage4_truncation_record", stage4_truncation_record, ctx)
@@ -3162,7 +3218,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_stage("stage6_handoff_validation", stage6_handoff_validation, ctx)
     run_stage("stage7_protocol_check", stage7_protocol_check, ctx)
     run_stage("stage8_quality_gate", stage8_quality_gate, ctx)
-    run_stage("stage8b_review_snapshot", stage8b_review_snapshot, ctx)
     run_stage("stage9_claimed_work", stage9_claimed_work, ctx)
     run_stage("stage10_facts_write", stage10_facts_write, ctx)
     run_stage("stage11_turn_ceiling", stage11_turn_ceiling, ctx)
