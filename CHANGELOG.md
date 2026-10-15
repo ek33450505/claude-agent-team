@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.6.1] — 2026-10-15
+
 ### Fixed
 - **The review gate never ran from the commit agent.** v10.6.0 told the commit agent to run
   `python3 -I -E -s ~/.claude/scripts/cast-review-gate.py`. The PreToolUse protected-write guard blocks that command,
