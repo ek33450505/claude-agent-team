@@ -222,7 +222,7 @@ run your first gated dispatch.
 
 ## The `cast` CLI
 
-`cast` is one binary with **41 subcommands** (`grep -cE '^  [a-z-]+\)' bin/cast`), grouped by what they do
+`cast` is one binary with **42 subcommands** (`grep -cE '^  [a-z-]+\)' bin/cast`), grouped by what they do
 with the record.
 
 | | |

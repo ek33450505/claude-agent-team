@@ -233,6 +233,7 @@ Subcommands:
   ${C_BOLD}ledger${C_RESET}    [SESSION] [--last N] [--since DATE] [--json] [--out FILE] [--verify FILE]  Render a signed per-session audit receipt from cast.db (exit 3 = incomplete receipt / unverifiable)
   ${C_BOLD}verify-chain${C_RESET}                        Verify the tamper-evident provenance chain (PASS/BROKEN)
   ${C_BOLD}provenance${C_RESET} <cmd>                    Provenance chain ops: verify | status | backfill | append <id>
+  ${C_BOLD}review-gate${C_RESET}                         Run the content-bound commit review gate (WARN-only, never blocks)
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
   ${C_BOLD}mcp${C_RESET}       serve|config|status              Expose the cast.db record read-only over MCP (stdio, opt-in)
   ${C_BOLD}cheap${C_RESET}     [status|config|check]         Local cheap-mode session via ccr + Ollama
@@ -5773,6 +5774,22 @@ _cmd_verify_chain() {
   return $?
 }
 
+# ── Subcommand: review-gate ──────────────────────────────────────────────────
+# Thin pass-through to the installed content-bound review gate (WARN-only).
+# Exists so the commit agent can run the gate without naming ~/.claude/scripts,
+# which the protected-write guard blocks. The script path is FIXED to
+# $HOME/.claude/scripts: CAST_SCRIPTS_DIR (and the repo fallback) are
+# deliberately NOT honored, so an env var set by an agent cannot swap the gate
+# for a fake. CAST_UNREVIEWED_OK from the caller's env reaches the script.
+_cmd_review_gate() {
+  local gate_script="${HOME}/.claude/scripts/cast-review-gate.py"
+  if [ ! -f "$gate_script" ]; then
+    echo "review-gate: not run (cast-review-gate.py not installed)"
+    exit 0
+  fi
+  exec python3 -I -E -s "$gate_script" "$@"
+}
+
 # ── Subcommand: incidents ────────────────────────────────────────────────────
 _cmd_incidents() {
   local incidents_script="${CAST_SCRIPTS_DIR}/cast-db-incidents.py"
@@ -5992,6 +6009,7 @@ case "$SUBCOMMAND" in
   ledger)               _cmd_ledger "$@" ;;
   verify-chain)         _cmd_verify_chain "$@" ;;
   provenance)           _cmd_provenance "$@" ;;
+  review-gate)          _cmd_review_gate "$@" ;;
   incidents)            _cmd_incidents "$@" ;;
   mcp)                  _cmd_mcp "$@" ;;
   files)                _cmd_files "$@" ;;

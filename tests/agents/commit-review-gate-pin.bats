@@ -22,8 +22,12 @@ review_gate_section() {
 }
 
 @test "commit.md carries the exact review-gate command" {
-  run grep -cF 'python3 -I -E -s ~/.claude/scripts/cast-review-gate.py' "$COMMIT_MD"
+  run grep -cFx 'cast review-gate' "$COMMIT_MD"
   assert_success
+  # The old direct-script form names ~/.claude/scripts, which the protected-write
+  # guard blocks; it must not come back.
+  run grep -cF '.claude/scripts/cast-review-gate.py' "$COMMIT_MD"
+  assert_output 0
 }
 
 @test "commit.md has the Review Gate (G1 - WARN only) section heading" {
@@ -35,7 +39,7 @@ review_gate_section() {
   run review_gate_section
   assert_success
   assert_output --partial 'never blocks'
-  assert_output --partial 'python3 -I -E -s ~/.claude/scripts/cast-review-gate.py'
+  assert_output --partial 'cast review-gate'
 }
 
 @test "Work Log template has a Review gate: field" {
