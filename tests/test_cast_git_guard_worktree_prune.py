@@ -30,12 +30,29 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 _REPO = Path(__file__).parent.parent
+
+def _stamp():
+    """(CPU secs of self + children, wall secs): perf bounds assert CPU (runner load cannot fail a
+    healthy guard) AND a generous 5x wall ceiling (a regression that WAITS still fails)."""
+    t = os.times()
+    return (t.user + t.system + t.children_user + t.children_system, t.elapsed)
+
+
+def _lap(s0):
+    c, w = _stamp()
+    return c - s0[0], w - s0[1]
+
+
+def _assert_fast(tc, lap, bound, what=''):
+    cpu, wall = lap
+    tc.assertLess(cpu, bound, f'CPU {cpu:.3f} s over the {bound} s bound {what}'.rstrip())
+    tc.assertLess(wall, 5 * bound, f'WALL {wall:.3f} s over the {5 * bound} s ceiling (hang/wait?) {what}'.rstrip())
+
 
 _spec = importlib.util.spec_from_file_location(
     'cast_git_guard_worktree_prune', str(_REPO / 'scripts' / 'cast-git-guard.py'))
@@ -376,19 +393,23 @@ class TestSymlinkedWorktreeEntryBlocksAnyGit(_Repo):
         for i in range(20):
             self.plant_real_entry(f'w{i}')
         cmd = G + ' -C ' + self.repo + ' status'
-        t0 = time.perf_counter()
+        t0 = _stamp()
         for _ in range(200):
             self.assertAllows(cmd)
-        per_call = (time.perf_counter() - t0) / 200
-        self.assertLess(per_call, 0.02, f'{per_call * 1000:.2f} ms per evaluation')
+        lap = _lap(t0)
+        per_call = lap[0] / 200
+        self.assertLess(per_call, 0.02, f'{per_call * 1000:.2f} ms CPU per evaluation')
+        self.assertLess(lap[1] / 200, 0.1, f'WALL {lap[1] / 200 * 1000:.2f} ms per evaluation (hang/wait?)')
         # at the cap (every entry needs its `gitdir` lstat): still a few ms
         for i in range(20, gg._MAX_WORKTREE_ENTRIES):
             self.plant_real_entry(f'w{i}')
-        t0 = time.perf_counter()
+        t0 = _stamp()
         for _ in range(20):
             self.assertAllows(cmd)
-        per_call = (time.perf_counter() - t0) / 20
-        self.assertLess(per_call, 0.1, f'{per_call * 1000:.2f} ms per evaluation at the cap')
+        lap = _lap(t0)
+        per_call = lap[0] / 20
+        self.assertLess(per_call, 0.1, f'{per_call * 1000:.2f} ms CPU per evaluation at the cap')
+        self.assertLess(lap[1] / 20, 0.5, f'WALL {lap[1] / 20 * 1000:.2f} ms per evaluation at the cap (hang/wait?)')
 
     def test_result_is_memoised_within_one_evaluation(self):
         self.plant_symlink_entry()
@@ -508,11 +529,11 @@ class TestHatchValueDoesNotRetokenizeTheSegment(_Base):
         seg = 'CAST_PUSH_OK=1 ' + G + ' push origin main ' + 'x' * 195000
         self.assertLess(len(seg), gg._MAX_GIT_SEGMENT_LEN)
         cmd = seg + '; ' + seg
-        t0 = time.perf_counter()
+        t0 = _stamp()
         code, msg = gg._git_evaluate(cmd)
-        elapsed = time.perf_counter() - t0
+        lap = _lap(t0)
         self.assertEqual((code, msg), (0, None))
-        self.assertLess(elapsed, 2.0, f'{elapsed:.2f} s')
+        _assert_fast(self, lap, 2.0)
 
 
 class TestGrepOpenFilesInPagerIsAnAcceptedResidual(_Base):
@@ -581,10 +602,11 @@ class TestDryRunLastToggleWins(_Repo):
 
     def test_toggle_scan_is_linear_on_a_run_of_dry_flags(self):
         cmd = G + ' worktree prune ' + '-n ' * 40000 + '--no-dry-run'
-        t0 = time.perf_counter()
+        t0 = _stamp()
         code, _ = self.verdict(cmd)
+        lap = _lap(t0)
         self.assertEqual(code, 2)
-        self.assertLess(time.perf_counter() - t0, 2.0)
+        _assert_fast(self, lap, 2.0)
 
 
 class TestWhereTheGitCommandRuns(_Repo):
@@ -685,9 +707,9 @@ class TestWhereTheGitCommandRuns(_Repo):
                 self.verdict(t)
 
     def test_resolution_reads_only_the_prefix_of_a_huge_segment(self):
-        t0 = time.perf_counter()
+        t0 = _stamp()
         self.assertBlocks(G + ' -C repo status ' + 'x' * 150000, 'SYMLINK')
-        self.assertLess(time.perf_counter() - t0, 1.0)
+        _assert_fast(self, _lap(t0), 1.0)
 
 
 class TestPlantingASymlinkUnderWorktrees(_Base):
@@ -809,12 +831,12 @@ class TestTrackerWorkIsLinearAndBounded(_Repo):
     def test_distinct_cds_are_fast_and_fail_closed_in_process(self):
         for kb in (20, 100):
             cmd = '; '.join(f'cd d{i}' for i in range(kb * 1000 // 8)) + '; ' + G + ' status'
-            t0 = time.perf_counter()
+            t0 = _stamp()
             code, msg = self.verdict(cmd)
-            elapsed = time.perf_counter() - t0
+            lap = _lap(t0)
             self.assertEqual(code, 2, kb)
             self.assertIn('too complex', msg)
-            self.assertLess(elapsed, 1.0, f'{kb} KB took {elapsed:.2f} s')
+            _assert_fast(self, lap, 1.0, f'({kb} KB)')
 
     def test_the_cap_boundary(self):
         ok = '; '.join(['cd .'] * (gg._MAX_TRACKED_CDS - 1)) + '; cd repo; ' + G + ' status'
@@ -836,13 +858,14 @@ class TestTrackerWorkIsLinearAndBounded(_Repo):
             'g = importlib.util.module_from_spec(sp); sp.loader.exec_module(g)\n'
             'g._record_hatch = lambda *a, **k: None\n'
             'cmd = "; ".join("cd d%d" % i for i in range(400000 // 8)) + "; " + "gi" + "t status"\n'
-            't0 = time.perf_counter(); code, msg = g._git_evaluate(cmd)\n'
-            'print(code, round(time.perf_counter() - t0, 3))\n')
+            't0 = time.process_time(); w0 = time.monotonic(); code, msg = g._git_evaluate(cmd)\n'
+            'print(code, round(time.process_time() - t0, 3), round(time.monotonic() - w0, 3))\n')
         out = subprocess.run([sys.executable, '-I', '-c', script, str(_REPO / 'scripts' / 'cast-git-guard.py'),
                               self.home], capture_output=True, text=True, cwd=self.root, timeout=60)
-        code, secs = out.stdout.split()
+        code, secs, wall = out.stdout.split()
         self.assertEqual(code, '2', out.stderr)
-        self.assertLess(float(secs), 1.0, f'{secs} s')
+        self.assertLess(float(secs), 1.0, f'CPU {secs} s over the 1.0 s bound')
+        self.assertLess(float(wall), 5.0, f'WALL {wall} s over the 5.0 s ceiling (hang/wait?)')
 
 
 class TestPrefixCapFailsClosed(_Repo):

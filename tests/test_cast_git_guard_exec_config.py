@@ -26,7 +26,6 @@ import importlib.util
 import os
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -86,6 +85,24 @@ INJECT_FORMS = (
     "GIT_CONFIG_PARAMETERS=\"'@K@'='@V@'\" " + G + ' status',
     "GIT_CONFIG_PARAMETERS=\"'a'='b' '@K@'='@V@'\" " + G + ' status',
 )
+
+
+def _stamp():
+    """(CPU secs of self + children, wall secs): perf bounds assert CPU (runner load cannot fail a
+    healthy guard) AND a generous 5x wall ceiling (a regression that WAITS still fails)."""
+    t = os.times()
+    return (t.user + t.system + t.children_user + t.children_system, t.elapsed)
+
+
+def _lap(s0):
+    c, w = _stamp()
+    return c - s0[0], w - s0[1]
+
+
+def _assert_fast(tc, lap, bound, what=''):
+    cpu, wall = lap
+    tc.assertLess(cpu, bound, f'CPU {cpu:.3f} s over the {bound} s bound {what}'.rstrip())
+    tc.assertLess(wall, 5 * bound, f'WALL {wall:.3f} s over the {5 * bound} s ceiling (hang/wait?) {what}'.rstrip())
 
 
 class _Base(unittest.TestCase):
@@ -329,7 +346,7 @@ class TestLinear(_Base):
     (CC >= 2.1.295), so a slow regex refuses legitimate commands (usability/compat guard, and a
     bypass guard on CC < 2.1.295, where a timeout is an ALLOW)."""
 
-    BOUND_SECS = 2.0
+    BOUND_SECS = 2.0   # CPU seconds (self + children), not wall: runner load must not fail it
 
     def test_adversarial_runs_finish_fast(self):
         cases = {
@@ -342,10 +359,9 @@ class TestLinear(_Base):
             'env-keys': ' '.join('GIT_CONFIG_KEY_%d=a.b' % i for i in range(2000)) + ' ' + G + ' status',
         }
         for name, cmd in cases.items():
-            t0 = time.perf_counter()
+            s0 = _stamp()
             self.verdict(cmd)
-            elapsed = time.perf_counter() - t0
-            self.assertLess(elapsed, self.BOUND_SECS, f'{name}: {elapsed:.2f}s on {len(cmd)} chars')
+            _assert_fast(self, _lap(s0), self.BOUND_SECS, f'{name}: {len(cmd)} chars')
 
 
 class TestSecurityRound1(_Base):

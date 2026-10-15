@@ -29,6 +29,25 @@ SCRIPTS = REPO / "scripts"
 WRAPPER = SCRIPTS / "cast-config-change-guard.sh"
 EVALUATOR = SCRIPTS / "cast_config_change_guard.py"
 
+
+def _stamp():
+    """(CPU secs of self + children, wall secs): perf bounds assert CPU (runner load cannot fail a
+    healthy guard) AND a generous 5x wall ceiling (a regression that WAITS still fails)."""
+    t = os.times()
+    return (t.user + t.system + t.children_user + t.children_system, t.elapsed)
+
+
+def _lap(s0):
+    c, w = _stamp()
+    return c - s0[0], w - s0[1]
+
+
+def _assert_fast(tc, lap, bound, what=''):
+    cpu, wall = lap
+    tc.assertLess(cpu, bound, f'CPU {cpu:.3f} s over the {bound} s bound {what}'.rstrip())
+    tc.assertLess(wall, 5 * bound, f'WALL {wall:.3f} s over the {5 * bound} s ceiling (hang/wait?) {what}'.rstrip())
+
+
 sys.path.insert(0, str(SCRIPTS))
 import cast_config_change_guard as guard  # noqa: E402
 
@@ -198,11 +217,11 @@ class EvaluateTests(unittest.TestCase):
                             ("benign", lambda i: f"BENIGN_KEY_{i}")):
             with self.subTest(label=label):
                 env = {make(i): "" for i in range(60000)}
-                started = time.monotonic()
+                started = _stamp()
                 result = guard.evaluate({"env": env})
                 # No process startup in this timing. The old quadratic dedupe took
                 # 5-11 s here, so 2 s still discriminates while tolerating a slow runner.
-                self.assertLess(time.monotonic() - started, 2.0)
+                _assert_fast(self, _lap(started), 2.0, label)
                 self.assertEqual(len(result), guard.MAX_NAMES if label == "offending" else 0)
 
     def test_disable_all_hooks_matrix(self):

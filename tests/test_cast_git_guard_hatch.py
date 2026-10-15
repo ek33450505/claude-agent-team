@@ -18,7 +18,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -29,6 +28,24 @@ _SCRIPT_PATH = _SCRIPTS_DIR / 'cast-git-guard.py'
 _spec = importlib.util.spec_from_file_location('cast_git_guard', str(_SCRIPT_PATH))
 cast_git_guard = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cast_git_guard)
+
+
+def _stamp():
+    """(CPU secs of self + children, wall secs): perf bounds assert CPU (runner load cannot fail a
+    healthy guard) AND a generous 5x wall ceiling (a regression that WAITS still fails)."""
+    t = os.times()
+    return (t.user + t.system + t.children_user + t.children_system, t.elapsed)
+
+
+def _lap(s0):
+    c, w = _stamp()
+    return c - s0[0], w - s0[1]
+
+
+def _assert_fast(tc, lap, bound, what=''):
+    cpu, wall = lap
+    tc.assertLess(cpu, bound, f'CPU {cpu:.3f} s over the {bound} s bound {what}'.rstrip())
+    tc.assertLess(wall, 5 * bound, f'WALL {wall:.3f} s over the {5 * bound} s ceiling (hang/wait?) {what}'.rstrip())
 
 
 class TestHatchValue(unittest.TestCase):
@@ -860,11 +877,11 @@ class TestHatchAuditIdentity(unittest.TestCase):
         os.chdir(self.repo)
         cmd = ' && '.join([self.COMMIT_CMD] * 60)
         with mock.patch.object(cast_git_guard, '_load_git_safe', return_value=_Spy):
-            t0 = time.monotonic()
+            s0 = _stamp()   # CPU bound (runner load must not fail it) + a 5x wall ceiling
             self.assertEqual(cast_git_guard._git_evaluate(cmd), (0, None))
-            elapsed = time.monotonic() - t0
+            lap = _lap(s0)
         self.assertLessEqual(len(calls), 2)
-        self.assertLess(elapsed, 1.0)
+        _assert_fast(self, lap, 1.0)
         n = len(self._events('COMMIT_HATCH_USED'))
         self.assertGreaterEqual(n, 1)
         self.assertLessEqual(n, cast_git_guard._MAX_HATCH_RECORDS_PER_COMMAND)

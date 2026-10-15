@@ -107,7 +107,8 @@ class _Timed(unittest.TestCase):
     def assert_blocked_fast(self, cmd, why=''):
         code, msg, (cpu, wall) = self.run_bash(cmd)
         self.assertEqual(code, 2, f'{why}: not blocked: {msg!r}')
-        self.assertLess(cpu, BOUND_SECS, f'{why}: took {cpu:.2f} s CPU ({wall:.2f} s wall)')
+        self.assertLess(cpu, BOUND_SECS, f'{why}: CPU {cpu:.2f} s over the bound ({wall:.2f} s wall)')
+        self.assertLess(wall, 5 * BOUND_SECS, f'{why}: WALL {wall:.2f} s over the ceiling (hang/wait?)')
         return msg
 
 
@@ -393,7 +394,8 @@ class TestContinuationJoinIsLinearAndIdentical(_Timed):
         c0 = os.times()
         gg._join_continuations('a\\\n' * 1600000)
         c1 = os.times()
-        self.assertLess((c1.user - c0.user) + (c1.system - c0.system), BOUND_SECS)
+        self.assertLess((c1.user - c0.user) + (c1.system - c0.system), BOUND_SECS, 'CPU over the bound')
+        self.assertLess(c1.elapsed - c0.elapsed, 5 * BOUND_SECS, 'WALL over the ceiling (hang/wait?)')
 
 
 class TestAuditSpawnsAreMemoisedPerCall(_Timed):

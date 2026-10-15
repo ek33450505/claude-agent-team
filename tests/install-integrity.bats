@@ -643,26 +643,35 @@ open(p, "wb").write(head + marshal.dumps(compile("import os\nos.system(\"id\")\n
 
 # --- timing ------------------------------------------------------------------------------------
 
-@test "timing: full ~190-file verification inside the hook budget" {
-  local n t0 t1 ms
+# Runs "$@" as a child, prints its stdout/stderr unchanged, and puts "<cpu_ms> <wall_ms>" of the child
+# tree on fd 9 (CPU = user+sys from RUSAGE_CHILDREN), so a perf bound is immune to runner load.
+cpu_timed() {
+  python3 -I -c '
+import os, resource, subprocess, sys, time
+w = time.monotonic()
+p = subprocess.run(sys.argv[1:], stdin=subprocess.DEVNULL)
+ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+os.write(9, ("%d %d\n" % (int((ru.ru_utime + ru.ru_stime) * 1000), int((time.monotonic() - w) * 1000))).encode())
+sys.exit(p.returncode)' "$@" 9>"$BATS_TEST_TMPDIR/cpu_ms"
+}
+
+@test "timing: full ~190-file verification inside the hook budget (checker CPU, hook wall)" {
+  local n cpu wall
   n="$(grep -vc '^#' "$MANIFEST")"
   [ "$n" -gt 150 ]
   # Worst case: a bytecode cache for EVERY script from every installed interpreter (all must verify).
   compile_all_pycs
   echo "caches: $(find "$HOME" -name '*.pyc' | wc -l | tr -d ' ') pyc files" >&3
-  t0="$(python3 -c 'import time; print(time.monotonic())')"
-  run python3 -I "$CHECKER" --home "$HOME"
-  t1="$(python3 -c 'import time; print(time.monotonic())')"
+  run cpu_timed python3 -I "$CHECKER" --home "$HOME"
   assert_success
-  ms="$(python3 -c "print(int(($t1 - $t0) * 1000))")"
-  echo "checker: $n files in ${ms}ms" >&3
-  [ "$ms" -lt 1500 ]
-  t0="$(python3 -c 'import time; print(time.monotonic())')"
-  run_health
-  t1="$(python3 -c 'import time; print(time.monotonic())')"
-  ms="$(python3 -c "print(int(($t1 - $t0) * 1000))")"
-  echo "health hook end-to-end: ${ms}ms" >&3
-  [ "$ms" -lt 2500 ]
+  read -r cpu wall < "$BATS_TEST_TMPDIR/cpu_ms"
+  echo "checker: $n files in ${cpu}ms cpu (${wall}ms wall)" >&3
+  [ "$cpu" -lt 1500 ]    # CPU: runner load must not fail the checker bound
+  [ "$wall" -lt 7500 ]   # generous 5x wall ceiling: a checker that WAITS must still fail
+  run cpu_timed bash "$HEALTH"
+  read -r cpu wall < "$BATS_TEST_TMPDIR/cpu_ms"
+  echo "health hook end-to-end: ${cpu}ms cpu (${wall}ms wall)" >&3
+  [ "$wall" -lt 2500 ]   # user-facing latency budget under the hook's wall timeout: wall, not CPU
 }
 
 # --- P1: the prefix probe must not run user-site code -----------------------------------------

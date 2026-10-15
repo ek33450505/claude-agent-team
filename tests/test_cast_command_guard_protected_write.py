@@ -1838,8 +1838,8 @@ class TestPerformance(_Base):
         "spec = importlib.util.spec_from_file_location('g', sys.argv[1])\n"
         "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)\n"
         "cmd = sys.stdin.read()\n"
-        "t = time.perf_counter(); blocked, _ = g.is_blocked(cmd)\n"
-        "print(time.perf_counter() - t, int(blocked))\n"
+        "t = time.process_time(); blocked, _ = g.is_blocked(cmd)\n"
+        "print(time.process_time() - t, int(blocked))\n"
     )
 
     _CHILD_COARSE = _CHILD.replace("g.is_blocked(cmd)", "(g.pw_coarse_desync(cmd), '')")

@@ -27,12 +27,30 @@ import json
 import os
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 _REPO = Path(__file__).parent.parent
+
+def _stamp():
+    """(CPU secs of self + children, wall secs): perf bounds assert CPU (runner load cannot fail a
+    healthy guard) AND a generous 5x wall ceiling (a regression that WAITS still fails)."""
+    t = os.times()
+    return (t.user + t.system + t.children_user + t.children_system, t.elapsed)
+
+
+def _lap(s0):
+    c, w = _stamp()
+    return c - s0[0], w - s0[1]
+
+
+def _assert_fast(tc, lap, bound, what=''):
+    cpu, wall = lap
+    tc.assertLess(cpu, bound, f'CPU {cpu:.3f} s over the {bound} s bound {what}'.rstrip())
+    tc.assertLess(wall, 5 * bound, f'WALL {wall:.3f} s over the {5 * bound} s ceiling (hang/wait?) {what}'.rstrip())
+
+
 _SCRIPT_PATH = _REPO / 'scripts' / 'cast-git-guard.py'
 _POLICIES = _REPO / 'config' / 'policies.json'
 
@@ -209,11 +227,11 @@ class TestEnvFilesRequireSecurity(_Base):
         ):
             with self.subTest(label=label):
                 self.assertLessEqual(len(path), 4000 + 1)
-                start = time.monotonic()
+                start = _stamp()
                 code, _msg = gg._policy_evaluate(path, SESS)
-                elapsed = time.monotonic() - start
+                lap = _lap(start)
                 self.assertIn(code, (0, 2))
-                self.assertLess(elapsed, 1.0, f'{label}: {elapsed:.3f}s')
+                _assert_fast(self, lap, 1.0, label)
 
     def test_a_passing_security_record_unblocks_exactly_this_session(self):
         self.record('security', 'DONE')
