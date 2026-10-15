@@ -928,6 +928,33 @@ REVIEW_SNAPSHOT_FILES_TABLE
   _columns_added=1
 fi
 
+# review_gate_decisions: one row per scripts/cast-review-gate.py run (v10.6.0 U2, WARN mode:
+# would_block records what enforcement WOULD have done). created_at is datetime('now') (SPACE
+# format) -- see scripts/migrations/038_review_gate_decisions.sql.
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -qw "review_gate_decisions"; then
+  sqlite3 "$DB_PATH" <<'REVIEW_GATE_DECISIONS_TABLE'
+CREATE TABLE IF NOT EXISTS review_gate_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT,
+    repo_root TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'warn' CHECK(mode IN ('warn','enforce')),
+    would_block INTEGER NOT NULL CHECK(would_block IN (0,1)),
+    n_staged INTEGER NOT NULL DEFAULT 0,
+    n_approved INTEGER NOT NULL DEFAULT 0,
+    n_unreviewed INTEGER NOT NULL DEFAULT 0,
+    n_blocked INTEGER NOT NULL DEFAULT 0,
+    n_derived INTEGER NOT NULL DEFAULT 0,
+    n_hatched INTEGER NOT NULL DEFAULT 0,
+    reasons TEXT,
+    commit_sha TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_review_gate_decisions_repo ON review_gate_decisions(repo_root);
+CREATE INDEX IF NOT EXISTS idx_review_gate_decisions_created ON review_gate_decisions(created_at);
+REVIEW_GATE_DECISIONS_TABLE
+  _columns_added=1
+fi
+
 # agent_hallucinations: claim verification telemetry (writer: cast-hallucination-guard.sh)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "agent_hallucinations"; then
   sqlite3 "$DB_PATH" <<'AGENT_HALLUCINATIONS_TABLE'

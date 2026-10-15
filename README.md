@@ -30,7 +30,7 @@
 CAST is a governance layer for Claude Code. It records what your agents did and enforces what they may do next.
 
 Every dispatch, review, truncation and cost lands in a typed SQLite schema on your machine at
-`~/.claude/cast.db`: <!-- CAST_DB_TABLE_COUNT -->45<!-- /CAST_DB_TABLE_COUNT --> typed tables that CAST provisions (a long-lived database
+`~/.claude/cast.db`: <!-- CAST_DB_TABLE_COUNT -->46<!-- /CAST_DB_TABLE_COUNT --> typed tables that CAST provisions (a long-lived database
 also carries tables from older migrations). CAST reads that record back to gate commits, recall past incidents into the next prompt, attribute spend per task, and estimate a
 dispatch before you make it. It is built on Claude Code's native primitives, with a roster of
 <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> specialist agents that plan, implement, review, test and commit.
@@ -280,7 +280,7 @@ detection, Handoff validation, honesty sensors, memory write) → **PreCompact**
 
 SQLite in WAL mode at `~/.claude/cast.db`, fully local. A retention job prunes old run rows (default 90 days,
 `CAST_DB_PRUNE_DAYS`).
-<!-- CAST_DB_TABLE_COUNT -->45<!-- /CAST_DB_TABLE_COUNT --> typed tables cover sessions, agent runs, routing events, quality gates,
+<!-- CAST_DB_TABLE_COUNT -->46<!-- /CAST_DB_TABLE_COUNT --> typed tables cover sessions, agent runs, routing events, quality gates,
 dispatch decisions, memories, eval runs, incidents and provenance. Query it with `cast ask`, `cast predict`
 and `cast cost --by-task`, or register it as a read-only stdio MCP server (`mode=ro`, no arbitrary SQL):
 `claude mcp add cast-record -- cast mcp serve`.

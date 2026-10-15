@@ -288,6 +288,13 @@
       "notes": "NEW v10.6.0 U1a (migration 037). One row per path whose git blob sha was identical at the reviewer's start and stop (blob = sha or 'DELETED'); written in the same transaction as its review_snapshots parent. No caller until U1b."
     },
     {
+      "table": "review_gate_decisions",
+      "writers": ["cast-review-gate.py:529"],
+      "cadence": "per_event",
+      "status": "live",
+      "notes": "NEW v10.6.0 U2 (migration 038). One row per cast-review-gate.py run (WARN mode: the gate never blocks; would_block records what enforcement WOULD have done). Not written when the DB or table is missing (the gate never creates a DB). commit_sha stays NULL until a later unit fills it. created_at is SQLite space format."
+    },
+    {
       "table": "agent_runs_daily",
       "writers": ["cast-db-rollup.py:172", "cast-db-rollup.py:206"],
       "cadence": "nightly",
