@@ -890,9 +890,9 @@ ACK_EVENTS_TABLE
 fi
 
 # review_snapshots + review_snapshot_files: content-bound review gate record (writer:
-# scripts/cast_review_snapshot.py record(); v10.6.0 U1a -- library + schema only, no caller
-# wired yet). One review_snapshots row per reviewer run; one review_snapshot_files row per
-# path whose blob was identical at the reviewer's start and stop. created_at uses
+# scripts/cast_review_snapshot.py record(); v10.6.0 U1a; written by the SubagentStop hook,
+# read by scripts/cast-review-gate.py). One review_snapshots row per reviewer run; one review_snapshot_files row per
+# covered path (APPROVE: unchanged start->stop; BLOCKED: every path either snapshot saw). created_at uses
 # datetime('now') (SPACE format), like ack_events -- see scripts/migrations/037_review_snapshots.sql.
 # Guards use `grep -qw` so each table name matches exactly (no prefix collision).
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -qw "review_snapshots"; then

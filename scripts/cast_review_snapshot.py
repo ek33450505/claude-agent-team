@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """cast_review_snapshot.py -- content-bound review gate: snapshot + verdict library.
 
-Design: plans/design/2026-10-15-content-bound-review-gate.md (U1a: library + schema only;
-nothing calls this module yet -- hook wiring is U1b, the commit gate is U2).
+Design: plans/design/2026-10-15-content-bound-review-gate.md (callers: SubagentStart hook,
+cast_subagent_stop.py stage8b_review_snapshot (stop snapshot + record), cast-review-gate.py).
 
 A reviewer run is bracketed by two snapshots of the repo's dirty set (path -> git blob sha,
-or "DELETED"). Only paths whose value is identical at start and stop (stable_files) were
-present unchanged for the whole review. record() persists one review_snapshots row
-(scope='files') plus one review_snapshot_files row per stable path.
+or "DELETED"). Paths whose value is identical at start and stop (stable_files) were unchanged
+for the whole review. record() persists one review_snapshots row (scope='files') plus one row
+per path the CALLER passes: the stop hook passes stable_files (APPROVE) or start|stop (BLOCKED).
 
 Every function here is fail-closed and never raises: take_snapshot/load_start return None,
 save_start/record/record_degraded_block return False, parse_verdict returns None, decide

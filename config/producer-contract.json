@@ -278,14 +278,14 @@
       "writers": ["cast_review_snapshot.py:423"],
       "cadence": "per_event",
       "status": "live",
-      "notes": "NEW v10.6.0 U1a (migration 037). One row per reviewer run (decision APPROVE|BLOCKED = parsed Verdict line AND passing Status). Library + schema only: record() has no caller until U1b wires SubagentStart/Stop. created_at is SQLite space format; started_at/ended_at are caller-supplied."
+      "notes": "NEW v10.6.0 U1a (migration 037). One row per reviewer run (decision APPROVE|BLOCKED = parsed Verdict line AND passing Status). Written by the SubagentStop hook (cast_subagent_stop.py stage8b) via record(); read by cast-review-gate.py. created_at is SQLite space format; started_at/ended_at are caller-supplied."
     },
     {
       "table": "review_snapshot_files",
       "writers": ["cast_review_snapshot.py:428"],
       "cadence": "per_event",
       "status": "live",
-      "notes": "NEW v10.6.0 U1a (migration 037). One row per path whose git blob sha was identical at the reviewer's start and stop (blob = sha or 'DELETED'); written in the same transaction as its review_snapshots parent. No caller until U1b."
+      "notes": "NEW v10.6.0 U1a (migration 037). One row per covered path (blob = sha or 'DELETED'): for APPROVE only paths whose blob was identical at the reviewer's start and stop; for BLOCKED every path either snapshot saw; written in the same transaction as its review_snapshots parent. Written by the SubagentStop hook (cast_subagent_stop.py stage8b) via record(); read by cast-review-gate.py."
     },
     {
       "table": "review_gate_decisions",
