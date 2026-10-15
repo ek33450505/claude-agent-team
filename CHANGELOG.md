@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.5.0] — 2026-10-15
+
 ### Removed
 - **The SessionEnd session distiller and `cast memory review`.** The distiller extracted candidate memories from each
   session transcript into per-project `memory/_pending/` queues for review in the `cast memory review` TUI. Only the
