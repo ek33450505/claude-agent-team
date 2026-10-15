@@ -40,10 +40,13 @@ def check_path_exists(path_str: str) -> bool:
         # If relative, check from repo root or home
         if not os.path.isabs(expanded):
             # Try current repo root (.git/.. fallback)
+            # Skipped when cwd is the filesystem root (launchd's cwd): a relative ref
+            # would resolve against "/" and count as present.
             repo_root = os.getcwd()
-            candidate = os.path.join(repo_root, expanded)
-            if os.path.isfile(candidate):
-                return True
+            if os.path.realpath(repo_root) != os.path.realpath(os.sep):
+                candidate = os.path.join(repo_root, expanded)
+                if os.path.isfile(candidate):
+                    return True
             # Try home
             candidate = os.path.join(os.path.expanduser('~'), expanded)
             if os.path.isfile(candidate):
