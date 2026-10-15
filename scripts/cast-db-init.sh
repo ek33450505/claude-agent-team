@@ -946,7 +946,6 @@ CREATE TABLE IF NOT EXISTS review_gate_decisions (
     n_derived INTEGER NOT NULL DEFAULT 0,
     n_hatched INTEGER NOT NULL DEFAULT 0,
     reasons TEXT,
-    commit_sha TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_review_gate_decisions_repo ON review_gate_decisions(repo_root);

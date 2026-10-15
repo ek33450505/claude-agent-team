@@ -292,7 +292,7 @@
       "writers": ["cast-review-gate.py:529"],
       "cadence": "per_event",
       "status": "live",
-      "notes": "NEW v10.6.0 U2 (migration 038). One row per cast-review-gate.py run (WARN mode: the gate never blocks; would_block records what enforcement WOULD have done). Not written when the DB or table is missing (the gate never creates a DB). commit_sha stays NULL until a later unit fills it. created_at is SQLite space format."
+      "notes": "NEW v10.6.0 U2 (migration 038). One row per cast-review-gate.py run (WARN mode: the gate never blocks; would_block records what enforcement WOULD have done). Not written when the DB or table is missing (the gate never creates a DB). created_at is SQLite space format."
     },
     {
       "table": "agent_runs_daily",

@@ -6,7 +6,7 @@
 --   false positives can be measured before enforcement is switched on.
 -- would_block = 1 iff any path was unreviewed or blocked (after the CAST_UNREVIEWED_OK hatch).
 -- reasons = JSON list of {path, category, reason} for non-approved paths only (<=50 entries,
---   <=16 KB). commit_sha is NULL here; a later unit fills it.
+--   <=16 KB).
 -- ⚠️ created_at uses SQLite datetime('now') (SPACE format), like review_snapshots.created_at.
 -- Bare CREATE ... IF NOT EXISTS is idempotent against a fresh DB where cast-db-init.sh already
 --   created the identical table; this migration backfills existing/legacy DBs.
@@ -24,7 +24,6 @@ CREATE TABLE IF NOT EXISTS review_gate_decisions (
   n_derived INTEGER NOT NULL DEFAULT 0,
   n_hatched INTEGER NOT NULL DEFAULT 0,
   reasons TEXT,
-  commit_sha TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_review_gate_decisions_repo ON review_gate_decisions(repo_root);

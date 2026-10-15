@@ -134,7 +134,6 @@ class TestClassification(GateCase):
         row = self.rows()[0]
         self.assertEqual((row["would_block"], row["n_staged"], row["n_approved"], row["mode"]), (0, 1, 1, "warn"))
         self.assertEqual(row["repo_root"], self.repo)
-        self.assertIsNone(row["commit_sha"])
 
     def test_security_only_approve_is_unreviewed(self):
         self.write("a.txt", "one\n")
