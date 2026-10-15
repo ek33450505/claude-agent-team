@@ -218,9 +218,9 @@ memory_names = [n for n in memory_names_raw.splitlines() if n]
 
 # Descriptions are NOT derived from bin/cast --help text (interleaved args,
 # inconsistent spacing — see the matching comment on completions/_cast's
-# top-level array). Their source is two-fold: `verify`, `show`, `delete`,
-# `review` and `dream` are taken verbatim from bin/cast's USAGE block
-# (`cast memory --help`), which annotates exactly those five; `search`,
+# top-level array). Their source is two-fold: `verify`, `show`, `delete`
+# and `dream` are taken verbatim from bin/cast's USAGE block
+# (`cast memory --help`), which annotates exactly those four; `search`,
 # `list`, `forget` and `export` carry no prose description there and are
 # carried forward from the pre-existing completions/_cast array. Both sets
 # are kept in sync by hand; the fail-closed check below is what forces that
@@ -233,7 +233,6 @@ MEMORY_DESCRIPTIONS = {
     "delete": "Delete a memory entry",
     "forget": "Delete a memory by ID",
     "export": "Export all memories as JSON",
-    "review": "Pending memory review TUI",
     "dream": "Run markdown memory consolidation",
 }
 

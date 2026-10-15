@@ -32,7 +32,6 @@ _cast_memory() {
     'delete:Delete a memory entry'
     'forget:Delete a memory by ID'
     'export:Export all memories as JSON'
-    'review:Pending memory review TUI'
     'dream:Run markdown memory consolidation'
   )
   # END GENERATED MEMORY SUBCOMMANDS (zsh)

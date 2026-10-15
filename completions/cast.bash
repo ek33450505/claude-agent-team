@@ -56,7 +56,7 @@ _cast_complete() {
       for (( i=2; i<cword; i++ )); do
         case "${words[$i]}" in
           # BEGIN GENERATED MEMORY SUBCOMMANDS (case) — do not edit by hand; run scripts/gen-completions.sh
-          search|list|verify|show|delete|forget|export|review|dream)
+          search|list|verify|show|delete|forget|export|dream)
           # END GENERATED MEMORY SUBCOMMANDS (case)
             mem_subcmd="${words[$i]}"
             break
@@ -66,7 +66,7 @@ _cast_complete() {
 
       if [[ -z "$mem_subcmd" ]]; then
         # BEGIN GENERATED MEMORY SUBCOMMANDS (list) — do not edit by hand; run scripts/gen-completions.sh
-        COMPREPLY=( $(compgen -W "search list verify show delete forget export review dream" -- "$cur") )
+        COMPREPLY=( $(compgen -W "search list verify show delete forget export dream" -- "$cur") )
         # END GENERATED MEMORY SUBCOMMANDS (list)
       else
         case "$mem_subcmd" in

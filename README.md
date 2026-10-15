@@ -13,7 +13,7 @@
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
   <img src="https://img.shields.io/badge/version-10.4.1-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
-  <img src="https://img.shields.io/badge/tests-4812-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-4767-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-plugin-blueviolet" alt="Claude Code plugin">
 </p>
@@ -274,7 +274,7 @@ Deterministic `command`-type hooks enforce; `prompt`-type hooks advise. The life
 **PreToolUse:Bash** (commit/push/stash block, `pkill` and `rm -rf` command guard, exec-surface write guard) →
 **PreToolUse:Write|Edit** (write guards, reviewer injection) → **PostToolUse** → **SubagentStop** (truncation
 detection, Handoff validation, honesty sensors, memory write) → **PreCompact** (dirty-repo compaction guard)
-→ **SessionEnd** (memory distiller). Write your own: **[docs/hooks/authoring-guide.md](docs/hooks/authoring-guide.md)**.
+→ **SessionEnd** (memory sync, resume scaffold). Write your own: **[docs/hooks/authoring-guide.md](docs/hooks/authoring-guide.md)**.
 
 ## The record
 
@@ -296,7 +296,7 @@ archives and promotes memories, and a memory recalled often decays more slowly t
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->261<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4812<!-- /CAST_TEST_COUNT --> test cases) cover hooks, migrations,
+<!-- CAST_TEST_FILE_COUNT -->259<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4767<!-- /CAST_TEST_COUNT --> test cases) cover hooks, migrations,
 guard logic, event emission and memory persistence, including tests that prove destructive operations
 **refuse**.
 

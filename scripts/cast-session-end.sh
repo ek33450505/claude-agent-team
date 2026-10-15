@@ -448,29 +448,6 @@ print(f"cast-session-end: memory sync {inserted} inserted, {updated} updated, {e
 PYEOF
 fi
 
-# === SESSION DISTILLER — extract memories from transcript ===
-# SessionEnd/Stop hook payloads do NOT carry transcript_path (only PostCompact does),
-# so resolve the main-session transcript by globbing on the resolved SESSION_ID.
-# Mirrors cast-subagent-stop-hook.sh's subagent-transcript glob. Layout:
-#   ~/.claude/projects/<project-slug>/<session_id>.jsonl
-DISTILLER="${HOME}/.claude/scripts/cast-session-distiller.py"
-if [[ -f "$DISTILLER" && -n "${SESSION_ID:-}" && "${SESSION_ID}" != "default" ]]; then
-  _TRANSCRIPT_PATH="$(CAST_SESSION="${SESSION_ID}" python3 -I -c "
-import glob, os, sys
-sid = os.environ.get('CAST_SESSION', '')
-if not sid:
-    sys.exit(0)
-matches = glob.glob(os.path.expanduser('~/.claude/projects/*/' + sid + '.jsonl'))
-if matches:
-    print(max(matches, key=os.path.getmtime))
-" 2>/dev/null || true)"
-  if [[ -f "${_TRANSCRIPT_PATH:-}" ]]; then
-    python3 -E -s "$DISTILLER" --input "$_TRANSCRIPT_PATH" --min-importance 0.7 \
-      >> "${HOME}/.claude/logs/distiller.log" 2>&1 || \
-      _log_error "cast-session-end: distiller failed for $_TRANSCRIPT_PATH"
-  fi
-fi
-
 # === RESUME SCAFFOLD — deterministic floor for next-session resume (B1) ===
 # Writes ~/.claude/resume-prompts/<date>-<repo>-auto.md from git/gh ground truth.
 # Repo resolved from stdin cwd (fallback $PWD); the scaffold self-guards non-repos
