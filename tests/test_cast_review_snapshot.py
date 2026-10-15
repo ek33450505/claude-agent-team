@@ -136,18 +136,18 @@ class TakeSnapshotTests(_TmpCase):
 
     def test_symlink_hashed_as_link_text_and_never_followed(self):
         repo = self.committed_repo()
-        secret = os.path.join(self.tmp, "outside-secret.txt")
-        with open(secret, "wb") as fh:
+        outside_target = os.path.join(self.tmp, "outside-file.txt")
+        with open(outside_target, "wb") as fh:
             fh.write(b"outside the repo\n")
-        os.symlink(secret, os.path.join(repo, "link"))
+        os.symlink(outside_target, os.path.join(repo, "link"))
         files = crs.take_snapshot(repo)["files"]
-        target = os.fsencode(secret)
-        want = hashlib.sha1(b"blob %d\0" % len(target) + target).hexdigest()
+        target = os.fsencode(outside_target)
+        want = hashlib.sha1(b"blob %d\0" % len(target) + target, usedforsecurity=False).hexdigest()
         self.assertEqual(files["link"], want)
         self.git(repo, "add", "link")  # what git itself stores for the symlink
         self.assertEqual(files["link"], self.git(repo, "ls-files", "-s", "link").split()[1])
         self.assertNotEqual(files["link"], hashlib.sha1(
-            b"blob 17\0outside the repo\n").hexdigest())
+            b"blob 17\0outside the repo\n", usedforsecurity=False).hexdigest())
 
     def test_dangling_symlink_is_recorded_not_dropped(self):
         repo = self.committed_repo()
@@ -229,7 +229,7 @@ class TakeSnapshotTests(_TmpCase):
             return real_git(repo_dir, args, timeout)
         with mock.patch.object(crs, "_git", side_effect=fake):
             val = crs.take_snapshot(repo)["files"]["l"]
-        self.assertEqual(val, hashlib.sha256(b"blob 3\0tgt").hexdigest())
+        self.assertEqual(val, hashlib.sha256(b"blob 3\0tgt", usedforsecurity=False).hexdigest())
 
     def test_resolve_repo_root(self):
         repo = self.committed_repo()

@@ -53,11 +53,11 @@ teardown() {
   assert_output --regexp '^[1-9][0-9]*$'
 }
 
-# 43 = +record_fts_ref (audit P-2, 2026-10-02). Update when a table is added/removed.
-@test "gen-cast-stats.sh produces tables=43" {
+# 46 = +review_snapshots, review_snapshot_files (U1a) + review_gate_decisions (U2), v10.6.0. Update when a table is added/removed.
+@test "gen-cast-stats.sh produces tables=46" {
   run jq -r '.tables' < "$CANONICAL_JSON"
   assert_success
-  assert_output "43"
+  assert_output "46"
 }
 
 @test "gen-cast-stats.sh produces commands=21" {

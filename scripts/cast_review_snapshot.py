@@ -104,7 +104,7 @@ def _object_format(root: str, timeout: float = _GIT_TIMEOUT) -> str:
 def _symlink_blob(full: str, fmt: str = "sha1") -> str:
     """Blob id git would store for a symlink: hash of 'blob <len>\\0' + link text."""
     target = os.fsencode(os.readlink(full))
-    return getattr(hashlib, fmt)(b"blob %d\0" % len(target) + target).hexdigest()
+    return getattr(hashlib, fmt)(b"blob %d\0" % len(target) + target, usedforsecurity=False).hexdigest()
 
 
 def _parse_status(out: str) -> Optional[Dict[str, bool]]:
