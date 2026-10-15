@@ -31,7 +31,7 @@ status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: [describe if BLOCKED, else "none"]
 ```
 
-`status` is the run status, never the review verdict; the verdict goes on the `Verdict:` line.
+`status` is the run status, never the review verdict; the verdict goes on the final verdict line of the Completion Report, never in a Handoff block.
 
 ## Review Process
 
@@ -65,8 +65,6 @@ Include specific examples of how to fix issues.
 ## Completion Report
 
 ```
-Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
-Verdict: APPROVE | BLOCKED
 Summary: [one-line summary of what was reviewed and the outcome]
 Concerns: [required if DONE_WITH_CONCERNS or BLOCKED]
 
@@ -77,13 +75,23 @@ Concerns: [required if DONE_WITH_CONCERNS or BLOCKED]
 - Critical issues: [count + one-line summary each, or "none"]
 - Warnings: [count + one-line summary each, or "none"]
 - Suggestions: [count, or "none"]
+
+Status: <DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT>
+Verdict: <APPROVE or BLOCKED>
 ```
 
-Coupling (every dispatch, orchestrated or not): `Verdict: BLOCKED` REQUIRES `Status: BLOCKED`; `Status: DONE` / `DONE_WITH_CONCERNS` only with `Verdict: APPROVE`. Always include the Verdict line — a missing Verdict is not an approval.
+Verdict rules (the commit gate parses your final message and denies by default):
+- Close your response with the template's last two lines, filled in: your Status line, then the verdict line, which keeps the template label exactly and replaces the placeholder with the single word APPROVE or BLOCKED. Write the verdict line exactly once, alone on its line, directly under your Status line, as the last line of your response. Emit nothing after it.
+- Never write the word verdict followed by a colon anywhere else (findings, Handoff blocks, JSON fences, quotes); say "the verdict line" instead.
+- If you must quote reviewed text containing such a line, describe it rather than quote it.
+- Reviewer exception to the cast-conventions Structured Output rule: emit the `json status` payload and any Facts block BEFORE your closing Status and verdict lines, never after them; this also overrides the cast-conventions rules that put Status first (Front-Load, Status Block Format, Agent Protocol item 4) or Facts last, so your Status line is second-to-last, just above the verdict line, and neither the payload nor the Facts may contain the word verdict.
+- Anything else (a second verdict line, extra text on the verdict line, a bulleted or indented verdict line) is read as BLOCKED by the commit gate.
+
+Coupling (every dispatch, orchestrated or not): a BLOCKED verdict REQUIRES `Status: BLOCKED`; `Status: DONE` / `DONE_WITH_CONCERNS` only with an APPROVE verdict. Always include the closing verdict line; a missing verdict is not an approval.
 
 ## Mandatory Final Step — Approval Marker (orchestrated dispatch only)
 
-Write the approval marker to the CAST state store **only when you are running under orchestration** — that is, when `TASK_ID` is set. In ad-hoc / manual (non-orchestrated) dispatch, `TASK_ID` is unset: do **NOT** write the marker. A reviewer that records its own "approved" verdict with no separate approver trips the harness self-approval guard, and the commit agent's approval gate has a session-scoped `agent_runs` fallback that does not need this record. In that case, state the verdict on its own `Verdict: APPROVE | BLOCKED` line in the Completion Report. Follow the Verdict/Status coupling in the Completion Report section.
+Write the approval marker to the CAST state store **only when you are running under orchestration** — that is, when `TASK_ID` is set. In ad-hoc / manual (non-orchestrated) dispatch, `TASK_ID` is unset: do **NOT** write the marker. A reviewer that records its own "approved" verdict with no separate approver trips the harness self-approval guard, and the commit agent's approval gate has a session-scoped `agent_runs` fallback that does not need this record. In that case, state your verdict on the final verdict line described in the Completion Report. Follow the Verdict/Status coupling in the Completion Report section.
 
 Before returning your Status block:
 
@@ -95,7 +103,7 @@ if [ -n "${TASK_ID:-}" ]; then
 fi
 ```
 
-If your decision is to BLOCK (critical issues found), use `"rejected"` instead of `"approved"` (still only when `TASK_ID` is set). Orchestrated mapping: `Verdict: APPROVE` → `approved`; `Verdict: BLOCKED` → `rejected`. This marker is mandatory **under orchestration** — the commit agent's approval gate reads it; without it the gate blocks. Under ad-hoc dispatch, your text verdict is the record.
+If your decision is to BLOCK (critical issues found), use `"rejected"` instead of `"approved"` (still only when `TASK_ID` is set). Orchestrated mapping: APPROVE is recorded as `approved`; BLOCKED is recorded as `rejected`. This marker is mandatory **under orchestration** — the commit agent's approval gate reads it; without it the gate blocks. Under ad-hoc dispatch, your text verdict is the record.
 
 ## Verify, Don't Assert
 
