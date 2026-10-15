@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.6.0] — 2026-10-15
+
 ### Added
 - **Reviewer runs now record what they reviewed.** Nothing tied a review to the code it covered: the commit approval
   gate accepted a same-session reviewer run from a finished-status `agent_runs` row, without checking the reviewer's
