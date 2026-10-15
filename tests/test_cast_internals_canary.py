@@ -291,6 +291,12 @@ class TestChecks(CanaryBase):
         _, out = self.run_main()
         self.assertNotIn("SIDECAR_NEW_KEYS", self.codes(out))
 
+    def test_isfork_key_known_silent(self):
+        # Claude Code writes isFork:true in fork-dispatch sidecars (live sample 2026-10-15).
+        self.sidecar({**GOOD, "agentType": "fork", "isFork": True})
+        _, out = self.run_main()
+        self.assertNotIn("SIDECAR_NEW_KEYS", self.codes(out))
+
 
 class TestInputHandling(CanaryBase):
     def test_symlinked_sidecar_unparsable(self):
