@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.5.1] — 2026-10-15
+
 ### Fixed
 - **The nightly memory verifiers no longer resolve refs against `/`.** `cast-maintenance.sh` runs both verifiers under
   launchd, whose working directory is the filesystem root. `cast-verify-memories.py --apply` and the staleness sweep's
