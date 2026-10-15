@@ -23,6 +23,11 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
+# Run from a git hook (e.g. opt-in pre-push), git exports GIT_DIR & co. into the env; any
+# BATS fixture that does `git init` would then leak into the OUTER repo. Clear them once
+# here so every BATS file gets a clean git env (git rediscovers the repo from cwd).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+
 # ── Preflight: BATS helper submodules must be initialised. ─────────────────────────────
 # tests/test_helper/bats-support and tests/test_helper/bats-assert are git submodules
 # (see .gitmodules); a plain 'git clone' does not populate them, and every test file

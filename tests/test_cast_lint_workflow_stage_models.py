@@ -33,6 +33,24 @@ lint = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(lint)
 
 
+def _stamp():
+    """(CPU secs of self + children, wall secs): perf bounds assert CPU (runner load cannot fail a
+    healthy guard) AND a generous 5x wall ceiling (a regression that WAITS still fails)."""
+    t = os.times()
+    return (t.user + t.system + t.children_user + t.children_system, t.elapsed)
+
+
+def _lap(s0):
+    c, w = _stamp()
+    return c - s0[0], w - s0[1]
+
+
+def _assert_fast(tc, lap, bound, what=''):
+    cpu, wall = lap
+    tc.assertLess(cpu, bound, f'CPU {cpu:.3f} s over the {bound} s bound {what}'.rstrip())
+    tc.assertLess(wall, 5 * bound, f'WALL {wall:.3f} s over the {5 * bound} s ceiling (hang/wait?) {what}'.rstrip())
+
+
 class WorkflowStageModelLintTest(unittest.TestCase):
     def _violations(self, source):
         """Write source to a temp .workflow.js and return the lint's findings."""
@@ -174,14 +192,13 @@ class WorkflowStageModelLintTest(unittest.TestCase):
         # The nested-span scan must stop at the first call that starts past this
         # call's span. Without that break, 30k sequential calls take ~15 s;
         # with it, well under one. Generous bound to stay non-flaky.
-        import time
         src = "agent(P);\n" * 30000
-        t0 = time.time()
+        s0 = _stamp()   # CPU bound (runner load must not fail it) + a 5x wall ceiling
         found, unterminated = lint.find_violations_in_source(src)
-        elapsed = time.time() - t0
+        lap = _lap(s0)
         self.assertEqual(len(found), 30000)
         self.assertIsNone(unterminated)
-        self.assertLess(elapsed, 5.0, 'nested-span loop looks quadratic again')
+        _assert_fast(self, lap, 5.0, 'nested-span loop looks quadratic again')
 
     def test_early_break_still_blanks_deeply_nested_inner_models(self):
         # inner-most has model; the two outer calls must still be reported (both on

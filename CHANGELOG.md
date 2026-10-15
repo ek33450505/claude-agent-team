@@ -4,6 +4,32 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.5.1] — 2026-10-15
+
+### Fixed
+- **The nightly memory verifiers no longer resolve refs against `/`.** `cast-maintenance.sh` runs both verifiers under
+  launchd, whose working directory is the filesystem root. `cast-verify-memories.py --apply` and the staleness sweep's
+  `cast_memory_verifier.py` resolved a memory's relative refs against that directory, so a ref such as `etc/hosts`
+  counted as present: the first bumped `verified_at`, the second skipped the confidence penalty. Both now skip the
+  working-directory candidate when it is `/`. In `cast-verify-memories.py` the "as-given" step checks only absolute
+  and `~` refs (relative ones go through the explicit working-directory root, so from a non-root directory a relative
+  ref can now resolve under an earlier root and report a different root label; the verdict is the same), and the
+  memory-file-dir root is made absolute, so a relative `--base-dir` cannot reintroduce the same lookup.
+- **BATS fixtures no longer inherit git's hook environment.** When the suite runs from a git hook (the opt-in
+  pre-push BATS gate goes through `tests/run.sh`), an inherited `GIT_DIR` and related variables override where a
+  fixture's `git` commands look, so they can act on the outer repository instead of the fixture. `tests/run.sh` clears `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_OBJECT_DIRECTORY`,
+  `GIT_COMMON_DIR`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT` once, before any
+  test file runs.
+- **Performance tests bound CPU time, with a wall-clock hang ceiling.** Their bounds were wall-clock, so load on a
+  shared runner failed them while the code was fine: `install-integrity.bats` failed `bats-macos` on `main` after
+  v10.4.1 (integrity checker 1611 ms against a 1500 ms bound; the same tree passed on the PR branch). Pure performance
+  bounds in the integrity, git-guard, config-change, policy, protected-write and workflow-lint tests now measure CPU
+  time including child processes, with the numbers unchanged, and each also asserts wall time under five times the
+  bound so a regression that waits still fails; the exception is the protected-write test, which measures inside a
+  child process and keeps its 60 s subprocess timeout as the wall guard. The
+  health hook's end-to-end bound stays wall-clock because it guards user-facing latency, and tests that prove a
+  timeout or kill fired, and the SIGALRM tripwires, are unchanged.
+
 ## [10.5.0] — 2026-10-15
 
 ### Removed

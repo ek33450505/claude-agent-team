@@ -29,6 +29,24 @@ from unittest import mock
 _REPO = Path(__file__).parent.parent
 _SCRIPT_PATH = _REPO / 'scripts' / 'cast-git-guard.py'
 
+def _stamp():
+    """(CPU secs of self + children, wall secs): perf bounds assert CPU (runner load cannot fail a
+    healthy guard) AND a generous 5x wall ceiling (a regression that WAITS still fails)."""
+    t = os.times()
+    return (t.user + t.system + t.children_user + t.children_system, t.elapsed)
+
+
+def _lap(s0):
+    c, w = _stamp()
+    return c - s0[0], w - s0[1]
+
+
+def _assert_fast(tc, lap, bound, what=''):
+    cpu, wall = lap
+    tc.assertLess(cpu, bound, f'CPU {cpu:.3f} s over the {bound} s bound {what}'.rstrip())
+    tc.assertLess(wall, 5 * bound, f'WALL {wall:.3f} s over the {5 * bound} s ceiling (hang/wait?) {what}'.rstrip())
+
+
 _spec = importlib.util.spec_from_file_location('cast_git_guard_status_gate', str(_SCRIPT_PATH))
 gg = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gg)
@@ -246,12 +264,12 @@ class TestControlCharPathFailsClosed(_Base):
     def test_4096_char_newline_path_is_blocked_fast(self):
         path = ('.env' * 1023) + '\nz'
         self.assertLessEqual(len(path), 4096)
-        t0 = time.monotonic()
+        t0 = _stamp()
         code, msg = gg.evaluate('Write', {'file_path': path}, SESS)
-        elapsed = time.monotonic() - t0
+        elapsed = _lap(t0)
         self.assertEqual(code, 2, msg)
         self.assertIn('control characters', msg)
-        self.assertLess(elapsed, 1.0, f'control-char path took {elapsed:.1f}s (regex backtracking?)')
+        _assert_fast(self, elapsed, 1.0, 'control-char path (regex backtracking?)')
 
     def test_control_char_path_that_no_policy_matches_is_still_blocked(self):
         for ch in ('\n', '\t', '\x00', '\x1f', '\x7f', '\r'):
@@ -309,13 +327,13 @@ class TestResolvedCandidateFailsClosed(_Base):
         raw = link + '/x.txt'
         self.assertIsNone(gg._POLICY_CONTROL_CHAR_RE.search(raw))  # the RAW path is control-free
         for tool in ('Write', 'Edit'):
-            t0 = time.monotonic()
+            t0 = _stamp()
             code, msg = gg.evaluate(tool, {'file_path': raw}, SESS)
-            elapsed = time.monotonic() - t0
+            elapsed = _lap(t0)
             self.assertEqual(code, 2, f'{tool}: resolved newline target was allowed')
             self.assertIn('symlink-resolved', msg)
             self.assertIn('control characters', msg)
-            self.assertLess(elapsed, 1.0)
+            _assert_fast(self, elapsed, 1.0)
 
     def test_symlink_to_a_normal_target_is_unaffected(self):
         link = self._link_to(os.path.join(self.home, 'tgt', 'plain'))
@@ -347,12 +365,12 @@ class TestResolvedCandidateFailsClosed(_Base):
         resolved = ('.env' * 850) + '\nz'
         self.assertLess(len(resolved), gg._POLICY_MAX_PATH_LEN)
         with mock.patch.object(gg.os.path, 'realpath', return_value=resolved):
-            t0 = time.monotonic()
+            t0 = _stamp()
             code, msg = gg.evaluate('Write', {'file_path': 'src/ok.txt'}, SESS)
-            elapsed = time.monotonic() - t0
+            elapsed = _lap(t0)
         self.assertEqual(code, 2, msg)
         self.assertIn('symlink-resolved', msg)
-        self.assertLess(elapsed, 1.0, f'resolved candidate took {elapsed:.1f}s (regex backtracking?)')
+        _assert_fast(self, elapsed, 1.0, 'resolved candidate (regex backtracking?)')
 
 
 class TestNonStringPathFailsClosed(_Base):

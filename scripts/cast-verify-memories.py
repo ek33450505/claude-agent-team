@@ -51,7 +51,10 @@ itself, against an explicit, ORDERED, named root list (first hit wins):
      `~/.claude/<ref with the leading "claude/" stripped>`, labeled
      distinctly so the report shows which rule resolved it.
   6. cwd: <cwd>/<ref> and <cwd>/scripts/<basename> (today's original
-     behaviour, kept last among the direct-join roots)
+     behaviour, kept last among the direct-join roots). SKIPPED when cwd is
+     the filesystem root "/" (launchd's cwd), where a relative ref would
+     resolve against "/". Likewise step 1 (as-given) checks only absolute /
+     ~-expanded refs; a relative ref is never tested against the process cwd.
   7. LAST RESORT — project-git-suffix: after every root above misses,
      resolve against the project's git-tracked file list (`git -C
      <project_root> ls-files`, project_root = the decoded root from step 3;
@@ -348,7 +351,7 @@ def build_search_roots(
     a joined candidate path.
     """
     home = os.path.expanduser("~")
-    memory_dir = os.path.dirname(memory_filepath)
+    memory_dir = os.path.abspath(os.path.dirname(memory_filepath))
     project_dir_name = os.path.basename(os.path.dirname(memory_dir))
     project_root = decode_project_dir(project_dir_name)
     cwd = os.getcwd()
@@ -363,8 +366,12 @@ def build_search_roots(
     roots.append(("home/.claude", os.path.join(home, ".claude")))
     roots.append(("home/.claude/scripts", os.path.join(home, ".claude", "scripts")))
     roots.append(("home/.claude(claude-prefix)", os.path.join(home, ".claude")))
-    roots.append(("cwd", cwd))
-    roots.append(("cwd/scripts", os.path.join(cwd, "scripts")))
+    # Under launchd (nightly cast-maintenance.sh) cwd is "/", so a relative ref
+    # like "etc/hosts" would resolve against the filesystem root and wrongly
+    # bump verified_at. Skip the cwd roots there (only removes roots).
+    if os.path.realpath(cwd) != os.path.realpath(os.sep):
+        roots.append(("cwd", cwd))
+        roots.append(("cwd/scripts", os.path.join(cwd, "scripts")))
     return roots, project_root
 
 
@@ -390,6 +397,10 @@ def resolve_ref(
 
     for label, root in roots:
         if label == "as-given":
+            # A relative ref would be tested against the process cwd (the
+            # filesystem root under launchd); the "cwd" root covers it safely.
+            if not is_abs:
+                continue
             candidate = expanded
         elif is_abs:
             # An absolute ref is only meaningfully checked "as given" — a

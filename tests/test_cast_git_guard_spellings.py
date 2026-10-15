@@ -63,7 +63,6 @@ import shutil
 import signal
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -77,6 +76,34 @@ _spec.loader.exec_module(gg)
 
 G = 'gi' + 't'
 BOUND_SECS = 2.0       # CI runners are ~1.2x slower and the dev box load average is 20-30: never below 2 s
+# BOUND_SECS and the other perf bounds are CPU time (self + children), not wall time: load from
+# other processes on a shared runner inflates wall time on a healthy guard. TRIPWIRE_SECS (a
+# SIGALRM that aborts a regressed guard) stays wall-clock.
+
+
+def _cpu_now():
+    t = os.times()
+    return t.user + t.system + t.children_user + t.children_system
+
+
+def _stamp():
+    """(CPU secs of self + children, wall secs): perf bounds assert CPU (runner load cannot fail a
+    healthy guard) AND a generous 5x wall ceiling (a regression that WAITS still fails)."""
+    t = os.times()
+    return (t.user + t.system + t.children_user + t.children_system, t.elapsed)
+
+
+def _lap(s0):
+    c, w = _stamp()
+    return c - s0[0], w - s0[1]
+
+
+def _assert_fast(tc, lap, bound, what=''):
+    cpu, wall = lap
+    tc.assertLess(cpu, bound, f'CPU {cpu:.3f} s over the {bound} s bound {what}'.rstrip())
+    tc.assertLess(wall, 5 * bound, f'WALL {wall:.3f} s over the {5 * bound} s ceiling (hang/wait?) {what}'.rstrip())
+
+
 TRIPWIRE_SECS = 4.0
 # The three destructive verbs the task pins; each is a different BLOCK family.
 VERBS = ('push origin main', 'commit -m x', 'reset --hard')
@@ -103,12 +130,12 @@ class _Base(unittest.TestCase):
         return gg.evaluate('Bash', {'command': cmd})
 
     def timed(self, cmd):
-        """(code, msg, elapsed); fails the test past TRIPWIRE_SECS (a regression, not a hang)."""
+        """(code, msg, cpu_elapsed); fails the test past TRIPWIRE_SECS (a regression, not a hang)."""
         def _alarm(signum, frame):
             raise _TooSlow()
         have_alarm = hasattr(signal, 'setitimer') and hasattr(signal, 'SIGALRM')
         previous = signal.signal(signal.SIGALRM, _alarm) if have_alarm else None
-        t0 = time.perf_counter()
+        t0 = _cpu_now()
         try:
             if have_alarm:
                 signal.setitimer(signal.ITIMER_REAL, TRIPWIRE_SECS)
@@ -119,7 +146,7 @@ class _Base(unittest.TestCase):
             if have_alarm:
                 signal.setitimer(signal.ITIMER_REAL, 0)
                 signal.signal(signal.SIGALRM, previous)
-        return code, msg, time.perf_counter() - t0
+        return code, msg, _cpu_now() - t0
 
     def assertBlocks(self, cmd):
         code, msg = self.verdict(cmd)
@@ -1115,9 +1142,9 @@ class TestA9Budget(_Base):
     def _lex_seconds(cmd, runs=3):
         best = 1e9
         for _ in range(runs):
-            t0 = time.perf_counter()
+            t0 = _cpu_now()
             gg._executed_code(cmd, [gg._MAX_EXEC_SCAN_STEPS, gg._MAX_EXEC_CODES])
-            best = min(best, time.perf_counter() - t0)
+            best = min(best, _cpu_now() - t0)
         return best
 
     def test_many_distinct_heredoc_delimiters_are_cheap(self):
@@ -1183,10 +1210,10 @@ class TestA9Budget(_Base):
         }
         for name, cmd in shapes.items():
             with self.subTest(shape=name, length=len(cmd)):
-                t0 = time.perf_counter()
+                t0 = _stamp()
                 with self.assertRaises(gg._ExecOverBudget):
                     gg._executed_code(cmd, [gg._MAX_EXEC_SCAN_STEPS, gg._MAX_EXEC_CODES])
-                self.assertLess(time.perf_counter() - t0, BOUND_SECS, name)
+                _assert_fast(self, _lap(t0), BOUND_SECS, name)
 
     def test_padded_input_is_blocked_end_to_end_within_the_budget(self):
         for name, cmd in {'metacharacters': (';' * 1_000_000) + G + ' status',
@@ -2198,9 +2225,9 @@ class TestReviewM4Bounds(_Oracle):
         self.assertTrue(gg._git_mentioned("$'" + r'\x41' * cap + r'\x67' + "'"))       # decoded: a letter of git
         self.assertFalse(gg._git_mentioned(r'\x41' * (cap + 1)))                       # no `$'`: not ANSI-C at all
         # bounded: a megabyte of escapes is answered by the cap, not by decoding them all
-        t0 = time.perf_counter()
+        t0 = _stamp()
         self.assertTrue(gg._git_mentioned("$'" + r'\x41' * 150_000 + "'"))
-        self.assertLess(time.perf_counter() - t0, BOUND_SECS)
+        _assert_fast(self, _lap(t0), BOUND_SECS)
 
 
 def _words(text):
@@ -2449,10 +2476,10 @@ class TestBivSH3PipeSink(_Oracle):
                 code, msg, elapsed = self.timed(cmd)
                 self.assertEqual(code, 2)
                 self.assertLess(elapsed, BOUND_SECS, f'{elapsed:.2f} s')
-        t0 = time.perf_counter()
+        t0 = _stamp()
         for _ in range(200):
             gg._PIPE_SINK.search('x' * 4096 + '| # ' * 1000, 0, 8000)
-        self.assertLess(time.perf_counter() - t0, 1.0)
+        _assert_fast(self, _lap(t0), 1.0)
 
 
 class TestBivSMZshEqualsExpansion(_Oracle):

@@ -51,7 +51,9 @@ G = 'gi' + 't'            # the verb is assembled so no literal guarded command 
 # 5 s hook timeout minus interpreter start-up. Measured 1.0-1.2 s on
 # GitHub's ubuntu runner vs ~0.3-0.9 s locally, so 1.0 s was a machine-dependent flake. This bound
 # is the secondary check: quadratic regressions take >= 4 s, which the verdict-message assertions
-# and TRIPWIRE_SECS catch.
+# and TRIPWIRE_SECS catch. BOUND_SECS is measured in CPU time (self + children), not wall time:
+# load from parallel processes inflated wall time to 2.6 s on a healthy guard. TRIPWIRE_SECS stays
+# wall-clock.
 BOUND_SECS = 2.0
 TRIPWIRE_SECS = 4.0       # a regressed guard is aborted here instead of running for 40+ s
 
@@ -78,12 +80,13 @@ class _Timed(unittest.TestCase):
         self.addCleanup(rec.stop)
 
     def run_bash(self, cmd):
-        """(code, msg, elapsed) for evaluate('Bash', cmd); fails the test past TRIPWIRE_SECS."""
+        """(code, msg, (cpu_secs, wall_secs)) for evaluate('Bash', cmd); fails the test past TRIPWIRE_SECS."""
         def _alarm(signum, frame):
             raise _TooSlow()
         have_alarm = hasattr(signal, 'setitimer') and hasattr(signal, 'SIGALRM')
         previous = signal.signal(signal.SIGALRM, _alarm) if have_alarm else None
-        t0 = time.perf_counter()
+        w0 = time.perf_counter()
+        c0 = os.times()
         try:
             if have_alarm:
                 signal.setitimer(signal.ITIMER_REAL, TRIPWIRE_SECS)
@@ -95,12 +98,17 @@ class _Timed(unittest.TestCase):
             if have_alarm:
                 signal.setitimer(signal.ITIMER_REAL, 0)
                 signal.signal(signal.SIGALRM, previous)
-        return code, msg, time.perf_counter() - t0
+        wall = time.perf_counter() - w0
+        c1 = os.times()
+        cpu = ((c1.user - c0.user) + (c1.system - c0.system)
+               + (c1.children_user - c0.children_user) + (c1.children_system - c0.children_system))
+        return code, msg, (cpu, wall)
 
     def assert_blocked_fast(self, cmd, why=''):
-        code, msg, elapsed = self.run_bash(cmd)
+        code, msg, (cpu, wall) = self.run_bash(cmd)
         self.assertEqual(code, 2, f'{why}: not blocked: {msg!r}')
-        self.assertLess(elapsed, BOUND_SECS, f'{why}: took {elapsed:.2f} s')
+        self.assertLess(cpu, BOUND_SECS, f'{why}: CPU {cpu:.2f} s over the bound ({wall:.2f} s wall)')
+        self.assertLess(wall, 5 * BOUND_SECS, f'{why}: WALL {wall:.2f} s over the ceiling (hang/wait?)')
         return msg
 
 
@@ -196,9 +204,9 @@ class TestShlexIsNotRunOnTokensItCannotUse(_Timed):
 
     def test_one_giant_non_git_segment_is_not_tokenised(self):
         # 1 MB single token, no `git` anywhere in it: shlex would need ~7 s; skipped entirely.
-        code, _msg, elapsed = self.run_bash('echo ' + 'x' * 1000000 + '; ' + G + ' status')
+        code, _msg, (cpu, _wall) = self.run_bash('echo ' + 'x' * 1000000 + '; ' + G + ' status')
         self.assertEqual(code, 0)
-        self.assertLess(elapsed, BOUND_SECS)
+        self.assertLess(cpu, BOUND_SECS)
 
     def test_a_giant_git_mentioning_segment_is_refused_not_tokenised(self):
         size = 250000        # fixed (not derived from the constant): a mutated cap must not OOM us
@@ -229,16 +237,16 @@ class TestShlexIsNotRunOnTokensItCannotUse(_Timed):
     def test_under_the_cumulative_cap_big_segments_are_still_decided_on_their_merits(self):
         seg = G + ' log ' + 'x' * 150000
         self.assertLessEqual(2 * len(seg), gg._MAX_GIT_TOKENIZE_BYTES)
-        code, msg, _elapsed = self.run_bash(seg + '; ' + seg + '; ' + G + ' push origin main')
+        code, msg, _times = self.run_bash(seg + '; ' + seg + '; ' + G + ' push origin main')
         self.assertEqual(code, 2)
         self.assertIn('Raw `git push` blocked', msg)         # reached the real verdict
-        code, msg, _elapsed = self.run_bash(seg + '; ' + seg)
+        code, msg, _times = self.run_bash(seg + '; ' + seg)
         self.assertEqual((code, msg), (0, ''))
 
     def test_non_git_segments_never_count_toward_the_cumulative_cap(self):
-        code, _msg, elapsed = self.run_bash(';'.join(['echo ' + 'x' * 100000] * 10) + '; ' + G + ' status')
+        code, _msg, (cpu, _wall) = self.run_bash(';'.join(['echo ' + 'x' * 100000] * 10) + '; ' + G + ' status')
         self.assertEqual(code, 0)
-        self.assertLess(elapsed, BOUND_SECS * 2)
+        self.assertLess(cpu, BOUND_SECS * 2)
 
     def test_git_mention_precheck_matches_every_spelling_normalisation_accepts(self):
         # _GIT_MENTION is a NECESSARY condition for `_normalize_git_segment` returning non-None:
@@ -383,9 +391,11 @@ class TestContinuationJoinIsLinearAndIdentical(_Timed):
         self.assertIn('Raw `git push` blocked', msg)   # the real verdict, not a bound/timeout
 
     def test_the_join_alone_is_linear(self):
-        t0 = time.perf_counter()
+        c0 = os.times()
         gg._join_continuations('a\\\n' * 1600000)
-        self.assertLess(time.perf_counter() - t0, BOUND_SECS)
+        c1 = os.times()
+        self.assertLess((c1.user - c0.user) + (c1.system - c0.system), BOUND_SECS, 'CPU over the bound')
+        self.assertLess(c1.elapsed - c0.elapsed, 5 * BOUND_SECS, 'WALL over the ceiling (hang/wait?)')
 
 
 class TestAuditSpawnsAreMemoisedPerCall(_Timed):
