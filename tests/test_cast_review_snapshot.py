@@ -33,8 +33,8 @@ def _clean_env(home):
     env.update(
         HOME=home,
         GIT_CONFIG_NOSYSTEM="1",
-        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
-        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com",
+        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
     )
     return env
 
@@ -668,7 +668,9 @@ class StartPersistenceTests(_TmpCase):
         path = os.path.join(self.sd, "agent-1_A.json")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(self.sd).st_mode), 0o700)
-        self.assertEqual(crs.load_start(self.sd, "agent-1_A", **self.K), self.snap)
+        got = crs.load_start(self.sd, "agent-1_A", **self.K)
+        self.assertRegex(got.pop("started_at"), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(got, self.snap)
         self.assertFalse(os.path.exists(path))
         self.assertIsNone(crs.load_start(self.sd, "agent-1_A", **self.K))  # consumed
         self.assertEqual([n for n in os.listdir(self.sd)], [])    # no tmp litter
@@ -683,7 +685,9 @@ class StartPersistenceTests(_TmpCase):
         self.assertTrue(crs.save_start(self.sd, "a1", self.snap, **self.K))
         newer = {"repo_root": "/r2", "files": {}}
         self.assertTrue(crs.save_start(self.sd, "a1", newer, **self.K))
-        self.assertEqual(crs.load_start(self.sd, "a1", **self.K), newer)
+        got = crs.load_start(self.sd, "a1", **self.K)
+        got.pop("started_at")
+        self.assertEqual(got, newer)
 
     def test_symlinked_state_file_refused(self):
         os.makedirs(self.sd, mode=0o700)
@@ -734,8 +738,9 @@ class StartPersistenceTests(_TmpCase):
             self.assertFalse(os.path.exists(os.path.join(self.sd, "a1.json")))  # consumed
         self.assertTrue(crs.save_start(self.sd, "a1", self.snap, session_id=None,
                                        reviewer="code-reviewer"))
-        self.assertEqual(crs.load_start(self.sd, "a1", session_id=None,
-                                        reviewer="code-reviewer"), self.snap)
+        got = crs.load_start(self.sd, "a1", session_id=None, reviewer="code-reviewer")
+        got.pop("started_at")
+        self.assertEqual(got, self.snap)
 
     def test_bare_snapshot_file_without_binding_envelope_is_refused(self):
         os.makedirs(self.sd, mode=0o700)
@@ -777,3 +782,98 @@ class StartPersistenceTests(_TmpCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IsReviewerTests(unittest.TestCase):
+    def test_matrix(self):
+        for name, want in [
+            ("code-reviewer", "code-reviewer"), ("security", "security"),
+            ("code-reviewer__fix-a", "code-reviewer"), ("security__x", "security"),
+            ("code-reviewer__", None), ("security__", None), ("code-reviewer2", None),
+            ("my-code-reviewer", None), ("security-auditor", None), ("backend-writer", None),
+            ("", None), (None, None), (5, None), ("Code-Reviewer", None),
+        ]:
+            self.assertEqual(crs.is_reviewer(name), want, repr(name))
+
+
+class DeadlineTests(_TmpCase):
+    def test_zero_deadline_returns_none_and_none_deadline_works(self):
+        repo = self.make_repo()
+        self.write(repo, "a.txt", b"a\n")
+        self.assertIsNone(crs.take_snapshot(repo, deadline_s=0))
+        self.assertIsNone(crs.take_snapshot(repo, deadline_s=-1))
+        self.assertEqual(list(crs.take_snapshot(repo, deadline_s=30)["files"]), ["a.txt"])
+        self.assertEqual(list(crs.take_snapshot(repo)["files"]), ["a.txt"])
+
+    def test_deadline_spent_between_git_calls_returns_none(self):
+        repo = self.make_repo()
+        self.write(repo, "a.txt", b"a\n")
+        seq = iter([0.0, 0.0, 0.0, 100.0, 100.0, 100.0, 100.0])
+        with mock.patch.object(crs.time, "monotonic", lambda: next(seq, 100.0)):
+            self.assertIsNone(crs.take_snapshot(repo, deadline_s=1.0))
+
+
+class GitTimeoutThreadingTests(_TmpCase):
+    def spy(self):
+        seen = []
+        real = crs._git
+
+        def f(repo_dir, args, timeout=30.0):
+            seen.append((args[0], timeout))
+            return real(repo_dir, args, timeout)
+        return seen, f
+
+    def test_resolve_repo_root_timeout_threaded_and_expired_skips_git(self):
+        repo = self.make_repo()
+        seen, f = self.spy()
+        with mock.patch.object(crs, "_git", f):
+            self.assertEqual(crs.resolve_repo_root(repo, timeout=1.5), os.path.realpath(repo))
+            self.assertEqual(seen, [("rev-parse", 1.5)])
+            seen.clear()
+            self.assertEqual(crs.resolve_repo_root(repo, timeout=100), os.path.realpath(repo))
+            self.assertEqual(seen, [("rev-parse", crs._GIT_TIMEOUT)])  # capped at 30
+            seen.clear()
+            self.assertEqual(crs.resolve_repo_root(repo, timeout=0), os.path.realpath(repo))
+            self.assertEqual(seen, [])  # expired: fallback without running git
+
+    def test_object_format_gets_remaining_budget_inside_take_snapshot(self):
+        repo = self.make_repo()
+        os.symlink("target", os.path.join(repo, "lnk"))
+        seen, f = self.spy()
+        with mock.patch.object(crs, "_git", f):
+            self.assertIsNotNone(crs.take_snapshot(repo, deadline_s=20.0))
+        fmt = [t for a, t in seen if a == "rev-parse"][1:]  # first rev-parse is --show-toplevel
+        self.assertTrue(fmt and all(0 < t <= 20.0 for _, t in seen), seen)
+
+
+class CliStartTests(_TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.repo = self.make_repo()
+        self.write(self.repo, "a.txt", b"a\n")
+        self.git(self.repo, "add", "-A")
+        self.git(self.repo, "commit", "-q", "-m", "init")
+        self.write(self.repo, "a.txt", b"changed\n")
+        self.sd = crs.default_state_dir()  # under the temp HOME
+
+    def test_start_round_trip(self):
+        rc = crs.main(["start", "--agent-id", "ag1", "--session-id", "s1",
+                       "--reviewer", "code-reviewer", "--cwd", self.repo])
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.sd.startswith(self.home))
+        snap = crs.load_start(self.sd, "ag1", session_id="s1", reviewer="code-reviewer")
+        self.assertEqual(snap["files"], {"a.txt": self.blob(self.repo, "a.txt")})
+
+    def test_never_raises_and_exits_zero(self):
+        self.assertEqual(crs.main(["start"]), 0)  # missing required args
+        self.assertEqual(crs.main(["bogus"]), 0)
+        self.assertEqual(crs.main(["start", "--agent-id", "../x", "--reviewer", "security",
+                                   "--cwd", self.repo]), 0)
+        self.assertEqual(crs.main(["start", "--agent-id", "a", "--reviewer", "security",
+                                   "--cwd", os.path.join(self.tmp, "nope")]), 0)
+        self.assertFalse(os.path.exists(self.sd) and os.listdir(self.sd))
+
+    def test_non_reviewer_writes_nothing(self):
+        self.assertEqual(crs.main(["start", "--agent-id", "ag2", "--session-id", "s",
+                                   "--reviewer", "backend-writer", "--cwd", self.repo]), 0)
+        self.assertFalse(os.path.exists(os.path.join(self.sd, "ag2.json")))

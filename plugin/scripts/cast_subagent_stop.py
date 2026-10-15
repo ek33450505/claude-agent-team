@@ -24,6 +24,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
@@ -707,6 +708,10 @@ class Ctx:
         self.data: dict = {}
         self.response_text: str = ""
         self.output_full: str = ""
+        # The exact final-message text compute_gate_match classified (output_full, or the
+        # SubagentHandback message when output_full is blank). stage8b parses its verdict
+        # from this so the verdict and the Status gate always come from the same string.
+        self.final_text: str = ""
         # True whenever response_text was recovered from a terminal tool_use block
         # (parse_input's C2 recovery path) rather than self-reported prose/JSON text —
         # regardless of which tool it came from. A genuine StructuredOutput call is
@@ -1029,13 +1034,15 @@ def parse_input(quiet_log: bool = False, raw: Optional[str] = None) -> Optional[
     ctx.has_verdict_keyword = bool(_VERDICT_RE.search(ctx.output_full))
     try:
         if (ctx.output_full or "").strip() or ctx.is_exempt:
+            ctx.final_text = ctx.output_full
             ctx.gate_match = compute_gate_match(ctx.output_full, ctx.is_exempt)
         else:
             # Empty payload: an async subagent that ended on its SubagentHandback call
             # leaves its report only in the transcript (see _handback_message). Only
             # that tool's `message` is read; output_full and every other stage are
             # unchanged.
-            ctx.gate_match = compute_gate_match(_handback_message(ctx), ctx.is_exempt)
+            ctx.final_text = _handback_message(ctx)
+            ctx.gate_match = compute_gate_match(ctx.final_text, ctx.is_exempt)
             if not ctx.gate_match and ctx.transcript_unreadable and not ctx.is_exempt:
                 # FAIL CLOSED on an unreadable/unlocatable transcript (see
                 # _handback_message): BLOCKED supersedes any earlier DONE record.
@@ -1746,6 +1753,127 @@ def _git_safe_run(repo_dir: str, args: list, timeout: float = 5.0):
         return _GIT_SAFE_MOD.run(repo_dir, args, timeout=timeout)
     except Exception:
         return subprocess.CompletedProcess(["git", *args], 3, "", "cast_git_safe error")
+
+
+# ── Review snapshot recorder (content-bound review gate, U1b) ───────────────
+_REVIEW_SNAP_MOD = None  # None=unattempted, False=load failed, module=loaded
+_REVIEW_SNAPSHOT_BUDGET_S = 5.0  # SubagentStop hook timeout is 15 s
+
+
+def _get_review_snapshot_module():
+    """Load cast_review_snapshot by sibling realpath (never a CWD-derived sys.path import)."""
+    global _REVIEW_SNAP_MOD
+    if _REVIEW_SNAP_MOD is None:
+        try:
+            import importlib.util as _ilu
+            spec = _ilu.spec_from_file_location(
+                "cast_review_snapshot",
+                os.path.join(os.path.dirname(os.path.realpath(__file__)), "cast_review_snapshot.py"),
+            )
+            if spec and spec.loader:
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _REVIEW_SNAP_MOD = mod
+            else:
+                _REVIEW_SNAP_MOD = False
+        except Exception:
+            _REVIEW_SNAP_MOD = False
+    return _REVIEW_SNAP_MOD or None
+
+
+def _write_review_unrecorded_marker(repo_root: str, ctx, reviewer: str) -> bool:
+    """Side marker U2 treats as a repo-wide BLOCK when neither DB row nor degraded row landed."""
+    try:
+        import hashlib
+        crs = _get_review_snapshot_module()
+        base = os.path.expanduser("~/.claude/cast-state/review-unrecorded")
+        if crs is None or not crs._state_dir_ok(base, create=True):
+            return False
+        name = hashlib.sha256(repo_root.encode("utf-8", "surrogateescape")).hexdigest()[:16]
+        payload = json.dumps({
+            "repo_root": repo_root, "session_id": ctx.session_id, "agent_id": ctx.agent_id,
+            "reviewer": reviewer, "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }).encode("utf-8")
+        fd = os.open(os.path.join(base, name), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload)
+        return True
+    except Exception:
+        return False
+
+
+def stage8b_review_snapshot(ctx: Ctx) -> None:
+    """Persist a content-bound review record for code-reviewer / security runs. Never raises.
+
+    Identity comes from the VERIFIED roster type (the meta.json sidecar), never from
+    ctx.agent_name: a dispatcher-chosen `name` overwrites the payload agent_type, so the
+    name is spoofable. Unverified roster -> nothing recorded (unreviewed at the gate).
+
+    Failure modes: a failed APPROVE record writes NO marker -- absence of an APPROVE row is
+    itself fail-closed at the gate. A BLOCKED verdict that cannot be recorded falls back to a
+    scope='repo' degraded row, then to the review-unrecorded side marker.
+    """
+    try:
+        crs = _get_review_snapshot_module()
+        if crs is None:
+            _log_error("review-snapshot: cast_review_snapshot unavailable")
+            return
+        if ctx.is_exempt or not ctx.agent_id or crs.is_reviewer(ctx.agent_name) is None:
+            return  # cheap pre-filter on the (spoofable) name; identity is verified next
+        reviewer = crs.is_reviewer(ctx.roster_type or _resolve_roster_type(ctx))
+        if reviewer is None:
+            _log_error(f"review-snapshot: roster type unverified for {ctx.agent_name} {ctx.agent_id}; not recorded")
+            return
+        text = ctx.final_text
+        decision = crs.decide(crs.parse_verdict(text), ctx.gate_match)
+        _payload_cwd = os.path.expanduser((ctx.data.get("cwd") or "").strip()) if isinstance(ctx.data, dict) else ""
+        repo_dir = _payload_cwd if _payload_cwd and os.path.isdir(_payload_cwd) else os.getcwd()
+        budget_end = time.monotonic() + _REVIEW_SNAPSHOT_BUDGET_S  # one budget for all git work
+        repo_root = crs.resolve_repo_root(repo_dir, timeout=budget_end - time.monotonic())
+        start = crs.load_start(crs.default_state_dir(), ctx.agent_id,
+                               session_id=ctx.session_id or None, reviewer=reviewer)
+        stop = crs.take_snapshot(repo_dir, deadline_s=max(0.0, budget_end - time.monotonic()))
+        db = ctx.db_path
+        ended = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        started = start.get("started_at") if isinstance(start, dict) else None
+        common = dict(session_id=ctx.session_id or None, agent_id=ctx.agent_id, reviewer=reviewer,
+                      started_at=started, ended_at=ended)
+        if decision == "APPROVE":
+            files = crs.stable_files(start, stop) if (start and stop) else {}
+            if files and crs.record(db, repo_root=stop["repo_root"], decision="APPROVE",
+                                    files=files, **common):
+                return
+            why = ("no start snapshot" if not start else "no stop snapshot" if not stop
+                   else "nothing stable" if not files else "record failed")
+            _log_error(f"review-snapshot: APPROVE not recorded for {reviewer} {ctx.agent_id}: {why}")
+            return
+        # BLOCKED: block everything the reviewer could have seen (start union stop).
+        # Both snapshots -> union; exactly one -> that snapshot's files; neither -> degraded.
+        ok = False
+        snaps = [x for x in (start, stop) if x]
+        if len(snaps) == 2 and start.get("repo_root") != stop.get("repo_root"):
+            snaps = []  # inconsistent roots: cannot scope safely -> degraded below
+        union = {}
+        for x in snaps:
+            union.update(x["files"])  # stop (last) wins in the primary row
+        if snaps and union:  # an empty union is a zero-path row: degrade instead
+            root = snaps[-1]["repo_root"]
+            ok = crs.record(db, repo_root=root, decision="BLOCKED", files=union, **common)
+            if ok and len(snaps) == 2:
+                sf, tf = start["files"], stop["files"]
+                older = {p: v for p, v in sf.items() if p in tf and tf[p] != v}
+                if older:  # (snapshot_id, path) is a PK: superseded start values get a 2nd row
+                    ok = crs.record(db, repo_root=root, decision="BLOCKED", files=older, **common)
+        if ok:
+            return
+        if repo_root and crs.record_degraded_block(db, repo_root=repo_root, **common):
+            _log_error(f"review-snapshot: degraded repo-scope BLOCK for {reviewer} {ctx.agent_id}")
+            return
+        if repo_root:
+            _write_review_unrecorded_marker(repo_root, ctx, reviewer)
+        _log_fail("review_snapshot", -1, f"BLOCK unrecorded for {reviewer} {ctx.agent_id}", ctx.session_id)
+    except Exception as exc:
+        _log_fail("review_snapshot", -1, f"{type(exc).__name__}: {exc}", ctx.session_id)
 
 
 # In-process cast-redact.py loader (replaces the per-event subprocess spawn).
@@ -3034,6 +3162,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_stage("stage6_handoff_validation", stage6_handoff_validation, ctx)
     run_stage("stage7_protocol_check", stage7_protocol_check, ctx)
     run_stage("stage8_quality_gate", stage8_quality_gate, ctx)
+    run_stage("stage8b_review_snapshot", stage8b_review_snapshot, ctx)
     run_stage("stage9_claimed_work", stage9_claimed_work, ctx)
     run_stage("stage10_facts_write", stage10_facts_write, ctx)
     run_stage("stage11_turn_ceiling", stage11_turn_ceiling, ctx)

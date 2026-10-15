@@ -30,9 +30,12 @@ CAST_DIR="${HOME}/.claude/cast"
 EVENTS_DIR="${CAST_DIR}/events"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 START_ERROR_LOG="${HOME}/.claude/logs/subagent-start-errors.log"
-# Export CAST_HOOK_DIR so Python heredocs can locate sibling scripts (cast_db.py, etc.)
+# Export CAST_HOOK_DIR so Python heredocs can locate sibling scripts (cast_db.py, etc.).
+# Derived from THIS file's own location and deliberately NOT from the inherited env var:
+# CAST_HOOK_DIR is settable via project settings env, and both the cast_db import and the
+# review-snapshot helper are executed from it, outside the sandbox.
 export CAST_HOOK_DIR
-CAST_HOOK_DIR="${CAST_HOOK_DIR:-$(cd "$(dirname "$0")" 2>/dev/null && pwd || dirname "$0")}"
+CAST_HOOK_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P || dirname "$0")"
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 mkdir -p "$EVENTS_DIR" 2>/dev/null || true
 
@@ -66,6 +69,7 @@ result = {
     "agent_name": data.get("agent_type") or data.get("agent_name") or data.get("subagent_name") or "unknown",
     "session_id": data.get("session_id") or None,
     "agent_id":   data.get("agent_id") or data.get("subagent_id") or "",
+    "cwd":        data.get("cwd") if isinstance(data.get("cwd"), str) else "",
 }
 print(json.dumps(result))
 PYEOF
@@ -84,7 +88,7 @@ export CAST_START_PARSED="$PARSED"
 # field (e.g. no session_id) collapse into ONE delimiter, shifting agent_id
 # into SESSION_ID and losing it. 0x1f is non-whitespace IFS, so empty fields
 # are preserved exactly. See tests: "no session_id" field-placement guards.
-IFS=$'\x1f' read -r AGENT_NAME SESSION_ID AGENT_ID <<<"$(python3 -I -c "
+IFS=$'\x1f' read -r AGENT_NAME SESSION_ID AGENT_ID PAYLOAD_CWD <<<"$(python3 -I -c "
 import json, os
 d = json.loads(os.environ.get('CAST_START_PARSED', '{}'))
 
@@ -94,8 +98,9 @@ def clean(v):
 agent_name = clean(d.get('agent_name')) or 'unknown'
 session_id = clean(d.get('session_id'))
 agent_id   = clean(d.get('agent_id'))
-print(f'{agent_name}\x1f{session_id}\x1f{agent_id}')
-" 2>/dev/null || printf 'unknown\x1f\x1f\n')"
+cwd        = clean(d.get('cwd'))
+print(f'{agent_name}\x1f{session_id}\x1f{agent_id}\x1f{cwd}')
+" 2>/dev/null || printf 'unknown\x1f\x1f\x1f\n')"
 export CAST_START_AGENT_ID="$AGENT_ID"
 
 # ── Step 1: Write task_claimed event to ~/.claude/cast/events/ ────────────────
@@ -228,6 +233,29 @@ for attempt in range(3):
             log_hook_failure('cast-subagent-start-hook:agent_runs', -1, f'{type(e).__name__}: {e}', sess)
         break
 PYEOF
+fi
+
+# ── Review snapshot (content-bound review gate, U1b) ─────────────────────────
+# LAST step, so a slow snapshot can never cost the task_claimed event or the
+# agent_runs row. Reviewer runs only (name pre-filter; the Stop hook re-verifies the
+# identity from the roster sidecar): record the dirty-set snapshot at START so the
+# verdict can be bound to the content present for the whole review. The helper
+# self-limits to a 2 s deadline (hook timeout is 3 s). Never fails the hook.
+REVIEWER_KIND=""
+case "$AGENT_NAME" in
+  code-reviewer|code-reviewer__?*) REVIEWER_KIND="code-reviewer" ;;
+  security|security__?*)           REVIEWER_KIND="security" ;;
+esac
+if [[ -n "$REVIEWER_KIND" && -n "$AGENT_ID" ]]; then
+  SNAP_HELPER="${CAST_HOOK_DIR}/cast_review_snapshot.py"
+  # Regular file, not a symlink, owned by us: it is executed outside the sandbox.
+  if [[ -f "$SNAP_HELPER" && ! -L "$SNAP_HELPER" && -O "$SNAP_HELPER" ]]; then
+    python3 -I -E -s "$SNAP_HELPER" start \
+      --agent-id "$AGENT_ID" --session-id "$SESSION_ID" --reviewer "$REVIEWER_KIND" \
+      --cwd "${PAYLOAD_CWD:-$PWD}" 2>>"$START_ERROR_LOG" || true
+  else
+    _log_error "review snapshot helper missing or not a user-owned regular file: $SNAP_HELPER"
+  fi
 fi
 
 exit 0

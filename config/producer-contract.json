@@ -12,25 +12,25 @@
     },
     {
       "table": "agent_runs",
-      "writers": ["cast-subagent-start-hook.sh:199", "cast-subagent-start-hook.sh:207"],
+      "writers": ["cast-subagent-start-hook.sh:204", "cast-subagent-start-hook.sh:212"],
       "cadence": "per_agent_run",
       "status": "live"
     },
     {
       "table": "agent_truncations",
-      "writers": ["cast_subagent_stop.py:1943"],
+      "writers": ["cast_subagent_stop.py:2071"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "agent_protocol_violations",
-      "writers": ["cast_subagent_stop.py:2474"],
+      "writers": ["cast_subagent_stop.py:2602"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "quality_gates",
-      "writers": ["cast_subagent_stop.py:2210", "orchestrate-dispatch.py:138", "write-guards.py:172"],
+      "writers": ["cast_subagent_stop.py:2338", "orchestrate-dispatch.py:138", "write-guards.py:172"],
       "cadence": "per_agent_run",
       "status": "live",
       "notes": "gate_type populated from 2026-07-03"
@@ -56,7 +56,7 @@
     },
     {
       "table": "routing_events",
-      "writers": ["cast-user-prompt-hook.sh:169", "cast_subagent_stop.py:2559", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
+      "writers": ["cast-user-prompt-hook.sh:169", "cast_subagent_stop.py:2687", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -87,7 +87,7 @@
     },
     {
       "table": "completeness_events",
-      "writers": ["cast_subagent_stop.py:2005"],
+      "writers": ["cast_subagent_stop.py:2133"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -144,7 +144,7 @@
     },
     {
       "table": "incidents",
-      "writers": ["cast_subagent_stop.py:2727", "cast-abandon-stale-runs.py:525"],
+      "writers": ["cast_subagent_stop.py:2855", "cast-abandon-stale-runs.py:525"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -275,14 +275,14 @@
     },
     {
       "table": "review_snapshots",
-      "writers": ["cast_review_snapshot.py:395"],
+      "writers": ["cast_review_snapshot.py:423"],
       "cadence": "per_event",
       "status": "live",
       "notes": "NEW v10.6.0 U1a (migration 037). One row per reviewer run (decision APPROVE|BLOCKED = parsed Verdict line AND passing Status). Library + schema only: record() has no caller until U1b wires SubagentStart/Stop. created_at is SQLite space format; started_at/ended_at are caller-supplied."
     },
     {
       "table": "review_snapshot_files",
-      "writers": ["cast_review_snapshot.py:400"],
+      "writers": ["cast_review_snapshot.py:428"],
       "cadence": "per_event",
       "status": "live",
       "notes": "NEW v10.6.0 U1a (migration 037). One row per path whose git blob sha was identical at the reviewer's start and stop (blob = sha or 'DELETED'); written in the same transaction as its review_snapshots parent. No caller until U1b."

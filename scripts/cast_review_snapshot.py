@@ -94,8 +94,8 @@ def _git(repo_dir: str, args: List[str], timeout: float = _GIT_TIMEOUT):
         return None
 
 
-def _object_format(root: str) -> str:
-    res = _git(root, ["rev-parse", "--show-object-format"])
+def _object_format(root: str, timeout: float = _GIT_TIMEOUT) -> str:
+    res = _git(root, ["rev-parse", "--show-object-format"], timeout)
     if res is not None and res.returncode == 0 and res.stdout.strip() == "sha256":
         return "sha256"
     return "sha1"
@@ -131,18 +131,21 @@ def _parse_status(out: str) -> Optional[Dict[str, bool]]:
     return paths
 
 
-def resolve_repo_root(repo_dir: str) -> Optional[str]:
+def resolve_repo_root(repo_dir: str, timeout: float = _GIT_TIMEOUT) -> Optional[str]:
     """realpath of the git toplevel for repo_dir, for the degraded-BLOCK path.
 
     If even a bare `rev-parse --show-toplevel` fails, fall back to the realpath of repo_dir
     itself (the hook payload's cwd). That is a weaker identity -- it may be a subdirectory of
     the real root -- but a BLOCK recorded under a too-narrow root is still recorded, which
     beats losing it; U2 matches roots by prefix for scope='repo' rows.
+
+    timeout: remaining wall-clock budget for the single git call; <= 0 skips git entirely
+    and returns the realpath fallback.
     """
     try:
         if not isinstance(repo_dir, str) or not repo_dir:
             return None
-        top = _git(repo_dir, ["rev-parse", "--show-toplevel"])
+        top = _git(repo_dir, ["rev-parse", "--show-toplevel"], min(_GIT_TIMEOUT, timeout)) if timeout > 0 else None
         if top is not None and top.returncode == 0 and top.stdout.strip("\n"):
             return os.path.realpath(top.stdout.strip("\n"))
         return os.path.realpath(repo_dir)
@@ -150,19 +153,38 @@ def resolve_repo_root(repo_dir: str) -> Optional[str]:
         return None
 
 
-def take_snapshot(repo_dir: str) -> Optional[dict]:
-    """Snapshot the dirty set of the git repo containing repo_dir, or None (fail closed)."""
+def take_snapshot(repo_dir: str, deadline_s: Optional[float] = None) -> Optional[dict]:
+    """Snapshot the dirty set of the git repo containing repo_dir, or None (fail closed).
+
+    deadline_s: wall-clock budget (time.monotonic). Checked before every git call and hash
+    batch; once spent the snapshot returns None. Each git call's timeout is min(30, remaining).
+    """
     try:
         if not isinstance(repo_dir, str) or not repo_dir:
             return None
-        top = _git(repo_dir, ["rev-parse", "--show-toplevel"])
+        end = None if deadline_s is None else time.monotonic() + deadline_s
+
+        def _t():
+            """Per-call git timeout, or None when the deadline is spent."""
+            if end is None:
+                return _GIT_TIMEOUT
+            rem = end - time.monotonic()
+            return None if rem <= 0 else min(_GIT_TIMEOUT, rem)
+
+        t = _t()
+        if t is None:
+            return None
+        top = _git(repo_dir, ["rev-parse", "--show-toplevel"], t)
         if top is None or top.returncode != 0:
             return None
         root_raw = top.stdout.strip("\n")
         if not root_raw:
             return None
         root = os.path.realpath(root_raw)
-        st = _git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+        t = _t()
+        if t is None:
+            return None
+        st = _git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], t)
         if st is None or st.returncode != 0:
             return None
         paths = _parse_status(st.stdout)
@@ -187,7 +209,10 @@ def take_snapshot(repo_dir: str) -> Optional[dict]:
             if stat.S_ISLNK(lst.st_mode):
                 # Never follow: hash the link text exactly as git stores it.
                 if fmt is None:
-                    fmt = _object_format(root)
+                    t = _t()
+                    if t is None:
+                        return None
+                    fmt = _object_format(root, t)
                 files[rel] = _symlink_blob(full, fmt)
             elif stat.S_ISREG(lst.st_mode):
                 total += lst.st_size
@@ -199,7 +224,10 @@ def take_snapshot(repo_dir: str) -> Optional[dict]:
 
         for i in range(0, len(to_hash), _HASH_BATCH):
             batch = to_hash[i:i + _HASH_BATCH]
-            res = _git(root, ["hash-object", "--"] + batch)
+            t = _t()
+            if t is None:
+                return None
+            res = _git(root, ["hash-object", "--"] + batch, t)
             if res is None or res.returncode != 0:
                 return None
             shas = res.stdout.split("\n")
@@ -535,6 +563,7 @@ def save_start(state_dir: str, agent_id: str, snap: dict, *,
             "reviewer": reviewer,
             "repo_root": snap["repo_root"],
             "snap": snap,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }).encode("utf-8")
         if len(data) > MAX_STATE_BYTES or not _state_dir_ok(state_dir, create=True):
             return False
@@ -558,7 +587,7 @@ def save_start(state_dir: str, agent_id: str, snap: dict, *,
 
 def load_start(state_dir: str, agent_id: str, *,
                session_id: Optional[str], reviewer: str) -> Optional[dict]:
-    """Read and DELETE <state_dir>/<agent_id>.json; the snapshot, or None.
+    """Read and DELETE <state_dir>/<agent_id>.json; the snapshot (plus `started_at`), or None.
 
     None when absent / invalid / oversized / not a regular file, or when the stored
     session_id + reviewer do not both match the caller's (the file is consumed either way).
@@ -598,7 +627,61 @@ def load_start(state_dir: str, agent_id: str, *,
             and isinstance(snap.get("files"), dict)
             and all(isinstance(k, str) and isinstance(v, str) for k, v in snap["files"].items())
         ):
+            started = env.get("started_at")
+            if isinstance(started, str) and started:
+                snap = dict(snap, started_at=started)
             return snap
         return None
     except Exception:
         return None
+
+
+# --- CLI (SubagentStart hook entry point) ---------------------------------------------------
+_REVIEWERS = ("code-reviewer", "security")
+START_DEADLINE_S = 2.0  # SubagentStart hook timeout is 3 s
+
+
+def is_reviewer(name) -> Optional[str]:
+    """'code-reviewer' / 'security' for the exact name or `<name>__<label>`; else None."""
+    try:
+        if not isinstance(name, str):
+            return None
+        for r in _REVIEWERS:
+            if name == r or (name.startswith(r + "__") and len(name) > len(r) + 2):
+                return r
+        return None
+    except Exception:
+        return None
+
+
+def main(argv=None) -> int:
+    """`start --agent-id ID --session-id SID --reviewer NAME --cwd DIR`. Always returns 0."""
+    try:
+        import argparse
+        import sys
+        p = argparse.ArgumentParser(prog="cast_review_snapshot")
+        sub = p.add_subparsers(dest="cmd")
+        s = sub.add_parser("start")
+        s.add_argument("--agent-id", required=True)
+        s.add_argument("--session-id", default="")
+        s.add_argument("--reviewer", required=True)
+        s.add_argument("--cwd", default="")
+        try:
+            args = p.parse_args(argv)
+        except SystemExit:
+            return 0
+        if args.cmd != "start" or is_reviewer(args.reviewer) is None:
+            return 0
+        cwd = args.cwd or os.getcwd()
+        snap = take_snapshot(cwd, deadline_s=START_DEADLINE_S)
+        if snap:
+            save_start(default_state_dir(), args.agent_id, snap,
+                       session_id=args.session_id or None, reviewer=args.reviewer)
+        return 0
+    except BaseException:
+        return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main(sys.argv[1:]))
