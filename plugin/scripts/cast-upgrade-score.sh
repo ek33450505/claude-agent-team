@@ -70,7 +70,7 @@ ${RELEASE_NOTES}
 #   --disable-slash-commands disables all skills (note: --bare still resolves /skill-name)
 #   --bare                   minimal mode: skips hooks (settings + plugins), CLAUDE.md /
 #                            auto-memory discovery and keychain, so untrusted notes never
-#                            reach the CAST hook stack (e.g. the session distiller) or
+#                            reach the CAST hook stack (e.g. SessionEnd hooks) or
 #                            see the user's memory. Auth = ANTHROPIC_API_KEY only, which
 #                            is hard-required above. UNVERIFIED: --bare combined with
 #                            --tools "" is pending a live probe.

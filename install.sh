@@ -623,6 +623,8 @@ rm -f "$CLAUDE_DIR/scripts/cast-agent-run-log.py" "$CLAUDE_DIR/scripts/cast-parr
 # Remove dead scripts retired in v9 §5.1 Unit D (zero-live-use helpers)
 rm -f "$CLAUDE_DIR/scripts/cast-plugin-install.sh" "$CLAUDE_DIR/scripts/cast-tmux-session.sh"
 rm -f "$CLAUDE_DIR/scripts/sync-ecosystem-readme.sh" "$CLAUDE_DIR/scripts/cast-morning-briefing-sdk.py"
+# Remove the session distiller and memory review TUI retired in v10.5.0
+rm -f "$CLAUDE_DIR/scripts/cast-session-distiller.py" "$CLAUDE_DIR/scripts/cast-memory-review.sh"
 # v7.5 Phase 7: removed dead reference skills
 rm -rf "$CLAUDE_DIR/skills/compact-discipline" "$CLAUDE_DIR/skills/thinking-budget"
 # Remove config retired in v7.5 Phase 6b (config-rot sweep, #152)

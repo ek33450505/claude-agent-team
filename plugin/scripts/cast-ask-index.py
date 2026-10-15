@@ -56,7 +56,7 @@ MAX_EMBED_INPUT = 8_000  # chars fed to the embedder (nomic context safety)
 
 
 # ---------------------------------------------------------------------------
-# Chrome marker filtering (mirrored from cast-session-distiller.py)
+# Chrome marker filtering (originally mirrored from the retired cast-session-distiller.py, removed v10.5.0)
 # Harness/command chrome markers — turns containing these are not user prose
 # ---------------------------------------------------------------------------
 
@@ -139,7 +139,7 @@ def _parse_transcript_body(path: str) -> str:
     """Extract text content from a JSONL transcript file (user + assistant turns).
 
     Preserves file order (user and assistant interleaved). Extends
-    cast-session-distiller.py's parse_user_prose logic to assistant turns.
+    the retired cast-session-distiller.py's (removed v10.5.0) parse_user_prose logic to assistant turns.
     Not imported because the module name contains a hyphen.
     Tolerates a partially-written last line via per-line try/except.
 

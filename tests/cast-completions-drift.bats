@@ -391,7 +391,7 @@ _extract_memory_zsh_set() {
   local dispatch_set count
   dispatch_set="$(_extract_memory_dispatch_set "$CAST_BIN")"
   count="$(printf '%s\n' "$dispatch_set" | grep -c .)"
-  [ "$count" -ge 9 ]
+  [ "$count" -ge 8 ]
 }
 
 @test "memory list region: no subcommand missing, no phantom, vs _cmd_memory dispatch table" {
@@ -436,7 +436,7 @@ _extract_memory_zsh_set() {
   [ -z "$only_case" ]
 }
 
-@test "zsh: memory generated subcommands region == _cmd_memory dispatch table (count 9)" {
+@test "zsh: memory generated subcommands region == _cmd_memory dispatch table (count 8)" {
   local dispatch_set zsh_set missing phantom count
   dispatch_set="$(_extract_memory_dispatch_set "$CAST_BIN")"
   zsh_set="$(_extract_memory_zsh_set "$ZSH_COMPLETIONS")"
@@ -449,7 +449,7 @@ _extract_memory_zsh_set() {
   fi
   [ -z "$missing" ]
   [ -z "$phantom" ]
-  [ "$count" -eq 9 ]
+  [ "$count" -eq 8 ]
 }
 
 @test "memory list region: comparison logic catches a planted phantom subcommand" {

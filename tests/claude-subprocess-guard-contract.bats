@@ -16,8 +16,8 @@
 #     cast-stat-claim-guard, pre-tool-guard, test_push_agent_stash_guard,
 #     cast-code-ref-guard — blockers pass '{}' with exit 0 even without the
 #     guard, so only the bypass tests detect guard removal.
-#   CLI-shaped scripts: cast-notify (whitelist), cast-overlay-sync,
-#     cast-memory-review — invoked directly, not via stdin hook pattern.
+#   CLI-shaped scripts: cast-notify (whitelist) and cast-overlay-sync —
+#     invoked directly, not via stdin hook pattern.
 #   payload-based count asserts: test_cast_truncation_check,
 #     test_cast_agent_protocol_check — guard is correct but the value of these
 #     tests is in the count/content assertions, not the guard check alone.

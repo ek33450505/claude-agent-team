@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 # and cut mid-token ("safe-by-const", "settings.json ONLY; t", "unpinn").
 #
 # Note the diagnosis this corrects: the finding that opened this item named
-# cast-session-distiller.py's `sentence[:140]`. That IS a byte slice and is fixed
+# the retired cast-session-distiller.py's (removed v10.5.0) `sentence[:140]`. That IS a byte slice and is fixed
 # too, but it is not what wrote these rows — the ceiling in the data is 100, not
 # 140, and it comes from here. The number in the evidence did not match the
 # number in the accused line, which is what gave it away.

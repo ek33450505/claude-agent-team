@@ -15,7 +15,7 @@
 #
 # NARROW EXCEPTION (commit d03de61): scripts/cast-upgrade-score.sh (and its
 # plugin/ copy) classify UNTRUSTED release notes with NO tools and need --bare
-# so the notes never reach the CAST hook stack (session distiller -> memory)
+# so the notes never reach the CAST hook stack (SessionEnd hooks)
 # or the user's memory/CLAUDE.md. A tool-less run has no tool calls for the
 # PreToolUse guard pipeline to guard. The exception is structural: the file must
 # be in ALLOWLIST below AND its non-comment lines must contain both

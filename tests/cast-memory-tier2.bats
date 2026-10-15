@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Tests for CAST Memory Persistence Tier 2 scripts:
 #   cast-memory-embed.py, cast-memory-validate.py,
-#   cast-memory-router.py (hybrid search), cast-session-distiller.py
+#   cast-memory-router.py (hybrid search)
 #
 # Coverage (surviving tests after orphan script cleanup):
 #   1-5.   cast-memory-embed: --text, --backfill, graceful on Ollama down,
@@ -9,7 +9,6 @@
 #          non-http scheme), embed_text short-circuits on unsafe URL
 #   6-8.   cast-memory-validate: --check, JSON, --archive-stale
 #   9-10.  cast-memory-router: hybrid search, Ollama fallback
-#   11-13. cast-session-distiller: --dry-run, JSON, feedback pattern → pending candidate
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -19,7 +18,6 @@ DB_INIT_SH="$REPO_DIR/scripts/cast-db-init.sh"
 EMBED_PY="$REPO_DIR/scripts/cast-memory-embed.py"
 VALIDATE_PY="$REPO_DIR/scripts/cast-memory-validate.py"
 ROUTER_PY="$REPO_DIR/scripts/cast-memory-router.py"
-DISTILLER_PY="$REPO_DIR/scripts/cast-session-distiller.py"
 
 # ---------------------------------------------------------------------------
 # Setup / Teardown — isolated temp home per test
@@ -234,33 +232,4 @@ except Exception as e:
 PYEOF
   assert_success
   assert_output --partial "fallback ok"
-}
-
-# ---------------------------------------------------------------------------
-# cast-session-distiller: stdin-based transcript extraction
-# ---------------------------------------------------------------------------
-
-@test "cast-session-distiller: --dry-run exits 0 on empty input" {
-  run bash -c "echo '' | python3 '$DISTILLER_PY' --dry-run"
-  assert_success
-}
-
-@test "cast-session-distiller: --dry-run output is valid JSON" {
-  run bash -c "echo '' | python3 '$DISTILLER_PY' --dry-run"
-  assert_success
-  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list)'
-}
-
-@test "cast-session-distiller: writes _pending candidate for feedback pattern (no DB write)" {
-  local pend="$HOME/.claude/distiller-pending"
-  run bash -c "echo \"don't mock the database in tests\" | python3 '$DISTILLER_PY' --pending-dir '$pend'"
-  assert_success
-
-  # A feedback candidate markdown file landed in the _pending/ queue
-  run bash -c "ls '$pend'/feedback_*.md 2>/dev/null | wc -l | tr -d ' '"
-  [ "$output" -ge 1 ]
-
-  # The distiller no longer writes to the DB
-  mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories WHERE agent='shared';" 2>/dev/null)"
-  [ "$mem_count" -eq 0 ]
 }

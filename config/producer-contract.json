@@ -183,7 +183,7 @@
     },
     {
       "table": "budgets",
-      "writers": ["bin/cast:1631"],
+      "writers": ["bin/cast:1617"],
       "cadence": "on_demand",
       "status": "live"
     },

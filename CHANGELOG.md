@@ -4,6 +4,20 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.5.0] — 2026-10-15
+
+### Removed
+- **The SessionEnd session distiller and `cast memory review`.** The distiller extracted candidate memories from each
+  session transcript into per-project `memory/_pending/` queues for review in the `cast memory review` TUI. Only the
+  review TUI promoted candidates (`cast doctor` and the morning briefing just counted or listed them), and the review
+  never happened: on 2026-10-15 the queues held 2228 candidate files across 32 projects, and `cast doctor` flagged the
+  backlog on every run. Removed: `cast-session-distiller.py` and its block in `cast-session-end.sh`,
+  `cast-memory-review.sh` with the `cast memory review` subcommand, the doctor "Pending memory review" check, the
+  morning-briefing step that listed the queue, their tests, and their plugin copies. `cast memory review` now reports
+  an unknown subcommand. `install.sh` removes the two retired scripts from `~/.claude/scripts/` on the next install.
+  The existing `_pending/` queues are not touched by this release; each candidate file still names
+  `cast memory review` in its header.
+
 ## [10.4.1] — 2026-10-14
 
 ### Fixed
