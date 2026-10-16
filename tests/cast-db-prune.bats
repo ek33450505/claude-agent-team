@@ -885,3 +885,156 @@ STUB
 
   rm -rf "$backup_dir"
 }
+
+# --- v10.6.0 review-gate tables (review_snapshots + files, review_gate_decisions) ---
+# Helper (not a test): create the three tables with the production DDL shape and
+# seed 3 snapshots (each with 2 file rows) and 1 old + 1 new decision.
+# ids are pinned: 1 = old APPROVE (-200 days); 2 = old BLOCKED (-100 days,
+# retained on purpose); 3 = new APPROVE (-1 days).
+seed_review_tables() {
+  sqlite3 "$TEST_DB" "
+    CREATE TABLE review_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT, agent_id TEXT,
+      reviewer TEXT NOT NULL,
+      repo_root TEXT NOT NULL,
+      decision TEXT NOT NULL CHECK(decision IN ('APPROVE','BLOCKED')),
+      scope TEXT NOT NULL DEFAULT 'files' CHECK(scope IN ('files','repo')),
+      started_at TEXT, ended_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE review_snapshot_files (
+      snapshot_id INTEGER NOT NULL REFERENCES review_snapshots(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      blob TEXT NOT NULL,
+      PRIMARY KEY (snapshot_id, path)
+    );
+    CREATE TABLE review_gate_decisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT,
+      repo_root TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'warn' CHECK(mode IN ('warn','enforce')),
+      would_block INTEGER NOT NULL CHECK(would_block IN (0,1)),
+      reasons TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    INSERT INTO review_snapshots (id, reviewer, repo_root, decision, created_at) VALUES
+      (1, 'code-reviewer', '/r', 'APPROVE', datetime('now', '-200 days')),
+      (2, 'code-reviewer', '/r', 'BLOCKED', datetime('now', '-100 days')),
+      (3, 'code-reviewer', '/r', 'APPROVE', datetime('now', '-1 days'));
+    INSERT INTO review_snapshot_files (snapshot_id, path, blob) VALUES
+      (1, 'a.py', 'b1'), (1, 'b.py', 'b2'),
+      (2, 'a.py', 'b3'), (2, 'b.py', 'b4'),
+      (3, 'a.py', 'b5'), (3, 'b.py', 'b6');
+    INSERT INTO review_gate_decisions (repo_root, would_block, created_at) VALUES
+      ('/r', 1, datetime('now', '-200 days')),
+      ('/r', 0, datetime('now', '-1 days'));
+  "
+}
+
+@test "review tables: old APPROVE rows deleted, old BLOCKED and new rows kept" {
+  seed_review_tables
+  run python3 "$SCRIPT"
+  assert_success
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshots;")" -eq 2 ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT group_concat(id) FROM (SELECT id FROM review_snapshots ORDER BY id);")" = "2,3" ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_gate_decisions;")" -eq 1 ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT would_block FROM review_gate_decisions;")" -eq 0 ]
+  assert_output --partial "review_snapshots: deleted 1 APPROVE row(s)"
+  assert_output --partial "review_snapshot_files: deleted 2 row(s)"
+  assert_output --partial "review_gate_decisions: deleted 1 row(s)"
+}
+
+@test "review tables: no orphan snapshot files; kept parent's files survive" {
+  seed_review_tables
+  # foreign_keys is OFF by default on this connection model (the production
+  # prune cannot rely on it either), so only an explicit child delete passes.
+  run python3 "$SCRIPT"
+  assert_success
+  orphans=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshot_files WHERE snapshot_id NOT IN (SELECT id FROM review_snapshots);")
+  [ "$orphans" -eq 0 ]
+  kept=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshot_files WHERE snapshot_id = 3;")
+  [ "$kept" -eq 2 ]
+  total=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshot_files;")
+  [ "$total" -eq 4 ]
+}
+
+@test "review tables: dry-run deletes nothing and logs would-delete for all three" {
+  seed_review_tables
+  export CAST_DB_PRUNE_DRY_RUN=1
+  run python3 "$SCRIPT"
+  assert_success
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshots;")" -eq 3 ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshot_files;")" -eq 6 ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_gate_decisions;")" -eq 2 ]
+  assert_output --partial "review_snapshots: would delete 1 APPROVE row(s)"
+  assert_output --partial "review_snapshot_files: would delete 2 row(s)"
+  assert_output --partial "review_gate_decisions: would delete 1 row(s)"
+}
+
+@test "review tables missing (older DB): non-fatal, other steps still run" {
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));
+    INSERT INTO agent_runs (agent, started_at) VALUES ('bot', datetime('now', '-200 days'));
+  "
+  run python3 "$SCRIPT"
+  assert_success
+  assert_output --partial "review_snapshots step failed (non-fatal)"
+  assert_output --partial "review_gate_decisions step failed (non-fatal)"
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events;")" -eq 0 ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs;")" -eq 0 ]
+}
+
+@test "review tables: parent delete failure rolls back the child delete too" {
+  seed_review_tables
+  # A trigger that aborts the parent DELETE makes the second statement fail
+  # AFTER the child delete ran; both must roll back (one transaction).
+  sqlite3 "$TEST_DB" "
+    CREATE TRIGGER block_parent_delete BEFORE DELETE ON review_snapshots
+    BEGIN SELECT RAISE(ABORT, 'blocked for test'); END;
+  "
+  run python3 "$SCRIPT"
+  assert_success
+  assert_output --partial "review_snapshots step failed (non-fatal)"
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshot_files;")" -eq 6 ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshots;")" -eq 3 ]
+}
+
+@test "review tables: old BLOCKED and new APPROVE for the same path+blob both survive with their files" {
+  # An aged-out BLOCKED would let the surviving APPROVE flip the gate to approved.
+  seed_review_tables
+  sqlite3 "$TEST_DB" "
+    INSERT INTO review_snapshots (id, reviewer, repo_root, decision, created_at) VALUES
+      (10, 'code-reviewer', '/r2', 'BLOCKED', datetime('now', '-300 days')),
+      (11, 'code-reviewer', '/r2', 'APPROVE', datetime('now', '-2 days'));
+    INSERT INTO review_snapshot_files (snapshot_id, path, blob) VALUES
+      (10, 'same.py', 'sameblob'), (11, 'same.py', 'sameblob');
+  "
+  run python3 "$SCRIPT"
+  assert_success
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshots WHERE id IN (10,11);")" -eq 2 ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT decision FROM review_snapshots WHERE id = 10;")" = "BLOCKED" ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshot_files WHERE snapshot_id IN (10,11) AND path = 'same.py' AND blob = 'sameblob';")" -eq 2 ]
+}
+
+@test "review tables: window is honored (40-day APPROVE kept by default, deleted by --days 30 with its files)" {
+  seed_review_tables
+  sqlite3 "$TEST_DB" "
+    INSERT INTO review_snapshots (id, reviewer, repo_root, decision, created_at) VALUES
+      (20, 'code-reviewer', '/r3', 'APPROVE', datetime('now', '-40 days'));
+    INSERT INTO review_snapshot_files (snapshot_id, path, blob) VALUES
+      (20, 'x.py', 'bx1'), (20, 'y.py', 'bx2');
+  "
+  run python3 "$SCRIPT"
+  assert_success
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshots WHERE id = 20;")" -eq 1 ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshot_files WHERE snapshot_id = 20;")" -eq 2 ]
+  run python3 "$SCRIPT" --days 30
+  assert_success
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshots WHERE id = 20;")" -eq 0 ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshot_files WHERE snapshot_id = 20;")" -eq 0 ]
+  # id 3 (new APPROVE, 1 day) and BLOCKED id 2 still survive at --days 30
+  [ "$(sqlite3 "$TEST_DB" "SELECT group_concat(id) FROM (SELECT id FROM review_snapshots ORDER BY id);")" = "2,3" ]
+  orphans=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM review_snapshot_files WHERE snapshot_id NOT IN (SELECT id FROM review_snapshots);")
+  [ "$orphans" -eq 0 ]
+}

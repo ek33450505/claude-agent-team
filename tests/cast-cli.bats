@@ -608,6 +608,46 @@ teardown_rules_fixture() {
   teardown_rules_fixture
 }
 
+# ---------------------------------------------------------------------------
+# cast review-gate: thin pass-through to the INSTALLED cast-review-gate.py.
+# The script path is fixed to the home scripts dir (CAST_SCRIPTS_DIR ignored).
+# ---------------------------------------------------------------------------
+
+write_review_gate_stub() {
+  # $1 = destination path, $2 = tag printed first
+  printf '%s\n' \
+    'import os, sys' \
+    "print('$2 unreviewed_ok=' + os.environ.get('CAST_UNREVIEWED_OK', '<unset>') + ' argv=' + ','.join(sys.argv[1:]))" \
+    "print('flags isolated=%d ignore_env=%d no_user_site=%d' % (sys.flags.isolated, sys.flags.ignore_environment, sys.flags.no_user_site))" \
+    'sys.exit(3)' > "$1"
+}
+
+@test "cast review-gate: passes env, argv, output and exit code through unchanged" {
+  write_review_gate_stub "$HOME/.claude/scripts/cast-review-gate.py" "HOMESTUB"
+  run env CAST_UNREVIEWED_OK='docs only' bash "$CAST_CLI" review-gate --flag x
+  [ "$status" -eq 3 ]
+  [ "${lines[0]}" = "HOMESTUB unreviewed_ok=docs only argv=--flag,x" ]
+  # The gate must run isolated (-I), ignoring PYTHON* env (-E), without user site (-s).
+  [ "${lines[1]}" = "flags isolated=1 ignore_env=1 no_user_site=1" ]
+}
+
+@test "cast review-gate: CAST_SCRIPTS_DIR cannot swap the gate script" {
+  write_review_gate_stub "$HOME/.claude/scripts/cast-review-gate.py" "HOMESTUB"
+  mkdir -p "$HOME/fake-scripts"
+  write_review_gate_stub "$HOME/fake-scripts/cast-review-gate.py" "FAKESTUB"
+  run env CAST_SCRIPTS_DIR="$HOME/fake-scripts" bash "$CAST_CLI" review-gate
+  [ "$status" -eq 3 ]
+  [[ "$output" == HOMESTUB* ]]
+  [[ "$output" != *FAKESTUB* ]]
+}
+
+@test "cast review-gate: missing script prints the not-run line and exits 0" {
+  rm -f "$HOME/.claude/scripts/cast-review-gate.py"
+  run bash "$CAST_CLI" review-gate
+  [ "$status" -eq 0 ]
+  [ "$output" = "review-gate: not run (cast-review-gate.py not installed)" ]
+}
+
 @test "cast rules status: still performs a dry run, live file byte-unchanged" {
   setup_rules_fixture
   echo "OLD" >"$RULES_LIVE_DIR/foo.md"

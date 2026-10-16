@@ -66,6 +66,7 @@ KNOWN_KEYS = frozenset({
     "teamName", "color", "planModeRequired", "permissionMode",
     "customAgentType", "spawnedAgentType", "worktreePath",
     "spawnedWithWorktree", "worktreeBranch", "parentAgentId", "workflowPhase",
+    "isFork",
 })
 # Only key names matching this are ever printed (fullmatch, so no newline slip).
 SAFE_KEY_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,31}")

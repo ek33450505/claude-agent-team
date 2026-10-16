@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """cast-db-prune.py — Delete rows older than the retention window from cast.db.
 
-Runs nightly via launchd (com.cast.db-prune). Four symmetric steps:
+Runs nightly via launchd (com.cast.db-prune). Six prune steps plus VACUUM:
 
   Step 1 — routing_events: rows whose `timestamp` is older than DAYS days
   are deleted. (Column name is `timestamp`, NOT `created_at`.)
@@ -15,7 +15,22 @@ Runs nightly via launchd (com.cast.db-prune). Four symmetric steps:
   Step 4 — otel_metrics: rows whose `received_at` is older than OTEL_DAYS
   days are deleted. (OTLP feed.)
 
-  Step 5 — VACUUM: runs only after a real prune that deleted >=1 row AND
+  Step 5 — review_snapshots + review_snapshot_files (v10.6.0 review gate):
+  APPROVE snapshot rows whose `created_at` is older than DAYS days are
+  deleted together with their child review_snapshot_files rows.  BLOCKED
+  snapshots (file-scope and scope='repo') are RETAINED on purpose: the gate
+  lets a BLOCKED on an exact (path, blob) outrank any APPROVE, so an aged-out
+  BLOCKED would let a surviving APPROVE for the same (path, blob) flip the
+  gate to approved (fail closed; volume is small).  Children are
+  deleted EXPLICITLY, before the parents, in ONE transaction (any error
+  rolls both back) — the schema's ON DELETE CASCADE is NOT relied on,
+  because `PRAGMA foreign_keys=ON` is a no-op inside an open transaction
+  and Python's sqlite3 opens one on the first DML.  Both counts are logged.
+
+  Step 6 — review_gate_decisions (v10.6.0 review gate): rows whose
+  `created_at` is older than DAYS days are deleted.
+
+  Step 7 — VACUUM: runs only after a real prune that deleted >=1 row AND
   whose freelist is >= CAST_DB_PRUNE_VACUUM_FREE_PCT percent of all pages
   (int 0-100, default 25; invalid values fall back to 25; 0 = always VACUUM
   after a delete). VACUUM rewrites the whole DB, which is very costly on a
@@ -39,7 +54,7 @@ Fail-closed rollup gate (real prune only):
   (the current DAYS, including any --days override) so the rollup's
   authoritative/insert-only split can never diverge from the window this
   prune deletes at.  If the rollup exits non-zero, times out, or cannot be
-  found, ALL FOUR delete steps AND the VACUUM are skipped — including
+  found, ALL delete steps AND the VACUUM are skipped — including
   otel_events/otel_metrics, which nothing rolls up — and a loud ERROR is
   logged.  The script still exits 0 to preserve the cron/launchd contract.
   There is NO escape hatch.  If this fails because the rollup tables are
@@ -51,7 +66,8 @@ skips both the backup gate and the rollup gate because it performs no
 destructive operations.
 
 Retention:
-  CAST_DB_PRUNE_DAYS  (default 90) — routing_events + agent_runs (steps 1-2).
+  CAST_DB_PRUNE_DAYS  (default 90) — routing_events + agent_runs (steps 1-2) and
+  review_snapshots/review_snapshot_files/review_gate_decisions (steps 5-6).
   CAST_PRUNE_OTEL_DAYS (default 10) — otel_events + otel_metrics (steps 3-4).
   The OTLP feed is high-volume and low-half-life, so it defaults to a tighter
   window. Set either lower to prune more aggressively, higher to retain more.
@@ -410,6 +426,58 @@ def _prune_table(
         return result.rowcount
 
 
+def _prune_review_snapshots(
+    conn: sqlite3.Connection,
+    days: int = DAYS,
+) -> tuple:
+    """Prune APPROVE review_snapshots and their review_snapshot_files children.
+
+    BLOCKED snapshots (file-scope and scope='repo' degraded rows) are NEVER
+    pruned, on purpose: scripts/cast-review-gate.py lets a recorded BLOCKED on
+    an exact (path, blob) outrank any APPROVE, so letting a BLOCKED age out
+    while a younger APPROVE for the same (path, blob) survives would flip the
+    gate from blocked to approved.  Retaining them fails closed; the volume is
+    small.
+
+    Returns (n_files, n_snapshots) — deleted counts, or would-delete counts in
+    dry-run.  Children are deleted EXPLICITLY, before the parents, in one
+    transaction (one commit; any error rolls both back).  The schema declares
+    ON DELETE CASCADE, but `PRAGMA foreign_keys=ON` is a no-op inside an open
+    transaction and Python's sqlite3 opens one on the first DML, so the cascade
+    cannot be relied on here.  Both tables use created_at in SQLite's space
+    format (datetime('now')), so the plain `<` compare against the
+    datetime('now','-N days') cutoff (computed once, bound as a parameter) is correct.
+    """
+    # Evaluate the cutoff ONCE and bind it to every statement: if each statement
+    # re-evaluated datetime('now'), a parent crossing the cutoff between the child
+    # and parent DELETEs would be removed while its children were not (orphans).
+    cutoff = conn.execute(
+        "SELECT datetime('now', ?)", (f'-{int(days)} days',),
+    ).fetchone()[0]
+    expired = "decision = 'APPROVE' AND created_at < ?"
+    child_scope = f"snapshot_id IN (SELECT id FROM review_snapshots WHERE {expired})"
+    if DRY_RUN:
+        n_files = conn.execute(
+            f"SELECT COUNT(*) FROM review_snapshot_files WHERE {child_scope}", (cutoff,),
+        ).fetchone()[0]
+        n_snaps = conn.execute(
+            f"SELECT COUNT(*) FROM review_snapshots WHERE {expired}", (cutoff,),
+        ).fetchone()[0]
+        return n_files, n_snaps
+    try:
+        n_files = conn.execute(
+            f"DELETE FROM review_snapshot_files WHERE {child_scope}", (cutoff,),
+        ).rowcount
+        n_snaps = conn.execute(
+            f"DELETE FROM review_snapshots WHERE {expired}", (cutoff,),
+        ).rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return n_files, n_snaps
+
+
 def main() -> None:
     # Parse CLI flags FIRST — before the backup gate or any DELETE. --help exits 0
     # and an unknown flag exits 2 here, so neither can fall through to the prune.
@@ -454,7 +522,7 @@ def main() -> None:
                 _log('ERROR: Skipping all delete steps — prune aborted (fail-closed)')
                 sys.exit(0)
 
-        # total_deleted gates Step 5 (VACUUM) below — only worth the I/O cost when
+        # total_deleted gates Step 7 (VACUUM) below — only worth the I/O cost when
         # a real delete actually freed pages. Dry-run counts are would-deletes, not
         # actual deletions, so they intentionally do NOT feed this total.
         total_deleted = 0
@@ -505,7 +573,31 @@ def main() -> None:
             print(f'[cast-db-prune] otel_metrics step failed: {e}', file=sys.stderr)
             _log(f'otel_metrics step failed (non-fatal): {e}')
 
-        # --- Step 5: VACUUM (reclaim freed pages) ---
+        # --- Step 5: review_snapshots + review_snapshot_files (column: created_at, window: DAYS) ---
+        # Children first, same transaction (see _prune_review_snapshots).
+        try:
+            n_files, n_snaps = _prune_review_snapshots(conn, days=DAYS)
+            action = 'would delete' if DRY_RUN else 'deleted'
+            _log(f'{mode_label}review_snapshot_files: {action} {n_files} row(s) of APPROVE snapshots older than {DAYS} days (BLOCKED retained)')
+            _log(f'{mode_label}review_snapshots: {action} {n_snaps} APPROVE row(s) older than {DAYS} days (BLOCKED retained)')
+            if not DRY_RUN:
+                total_deleted += n_files + n_snaps
+        except Exception as e:
+            print(f'[cast-db-prune] review_snapshots step failed: {e}', file=sys.stderr)
+            _log(f'review_snapshots step failed (non-fatal): {e}')
+
+        # --- Step 6: review_gate_decisions (column: created_at, window: DAYS) ---
+        try:
+            count = _prune_table(conn, 'review_gate_decisions', 'created_at', days=DAYS)
+            action = 'would delete' if DRY_RUN else 'deleted'
+            _log(f'{mode_label}review_gate_decisions: {action} {count} row(s) older than {DAYS} days')
+            if not DRY_RUN:
+                total_deleted += count
+        except Exception as e:
+            print(f'[cast-db-prune] review_gate_decisions step failed: {e}', file=sys.stderr)
+            _log(f'review_gate_decisions step failed (non-fatal): {e}')
+
+        # --- Step 7: VACUUM (reclaim freed pages) ---
         # DELETE marks pages free but does not shrink the file; VACUUM rebuilds
         # the DB to reclaim them. Guarded to real (non-dry-run) prunes that
         # actually deleted at least one row, AND to a freelist ratio at or above

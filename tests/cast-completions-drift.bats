@@ -245,7 +245,7 @@ with open(path, 'w') as f:
 #    count assertion (40) per the dispatch-table ground truth.
 # ───────────────────────────────────────────────────────────────────────────
 
-@test "zsh: generated subcommands region == dispatch table (count 41)" {
+@test "zsh: generated subcommands region == dispatch table (count 42)" {
   local dispatch_set zsh_set missing phantom count
   dispatch_set="$(_extract_dispatch_set "$CAST_BIN")"
   zsh_set="$(_extract_zsh_list_set "$ZSH_COMPLETIONS")"
@@ -258,7 +258,7 @@ with open(path, 'w') as f:
   fi
   [ -z "$missing" ]
   [ -z "$phantom" ]
-  [ "$count" -eq 41 ]
+  [ "$count" -eq 42 ]
 }
 
 @test "zsh: zero phantom subcommands (run queue audit daemon) in generated region" {

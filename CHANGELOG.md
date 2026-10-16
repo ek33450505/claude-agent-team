@@ -4,6 +4,35 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.6.1] — 2026-10-15
+
+### Fixed
+- **The review gate never ran from the commit agent.** v10.6.0 told the commit agent to run
+  `python3 -I -E -s ~/.claude/scripts/cast-review-gate.py`. The PreToolUse protected-write guard blocks that command,
+  so commits made by the agent wrote no `review_gate_decisions` row. A new `cast review-gate` subcommand runs the
+  installed gate with `python3 -I -E -s` and passes `CAST_UNREVIEWED_OK` through; it ignores `CAST_SCRIPTS_DIR`, and
+  prints a "not run" line and exits 0 when the script is missing. The commit agent now calls `cast review-gate`, which
+  exists once the Homebrew `cast` is upgraded to this release; until then the agent records the gate as not run. The
+  guard is unchanged. The gate is still WARN-only.
+- **The SubagentStop hook could overrun its 15 s timeout.** Each git call in the full pass waited up to its own 5 s, so
+  a hung git could get the hook killed before a reviewer's verdict was recorded. The full pass now has a 12 s budget:
+  a stage that would start after it is skipped and logged, and git calls and the redaction subprocess fallback get
+  only the time left. SQLite waits inside a running stage are not clamped, so the budget is not a hard cap. The
+  review-record stage now runs right after the first two stages and is exempt from the skip, as is the final stage
+  that emits the wrapper's tail block. With no time left the review-record stage skips git and still records a BLOCKED
+  verdict, from the start snapshot's files when that snapshot lists any, otherwise as a repo-wide block row (or a
+  review-unrecorded marker if that row's database write also fails); an APPROVE is not recorded in that case.
+- **`cast doctor` reported `SIDECAR_NEW_KEYS: isFork`.** Claude Code now writes `"isFork": true` in fork subagent
+  sidecars; the internals canary lists it as a known key.
+
+### Changed
+- **`cast-db-prune.py` prunes the review-gate tables.** At `CAST_DB_PRUNE_DAYS` (default 90) or `--days`, it deletes
+  APPROVE rows from `review_snapshots` together with their `review_snapshot_files` rows (children first, in one
+  transaction), and `review_gate_decisions` rows older than the same retention window. BLOCKED snapshots are kept: a
+  recorded BLOCKED on a path and blob outranks an APPROVE for that same path and blob, so pruning one could turn a
+  blocked file into an approved one. Pruning an old APPROVE can bring back an older repo-wide block that it had
+  cleared; that errs toward blocking. The backup and rollup gates still run first.
+
 ## [10.6.0] — 2026-10-15
 
 ### Added

@@ -1,8 +1,8 @@
 {
-  "version": "10.6.0",
-  "versionTag": "v10.6.0",
+  "version": "10.6.1",
+  "versionTag": "v10.6.1",
   "agents": 27,
-  "tests": 4757,
+  "tests": 4767,
   "test_files": 259,
   "tables": 46,
   "commands": 21,
