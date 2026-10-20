@@ -23,12 +23,16 @@
 #                                 CAST_DB_TABLE_COUNT -> tables
 #                                 CAST_COMMAND_COUNT  -> commands
 #                                 CAST_SKILL_COUNT    -> skills
+#                                 CAST_PACKAGE_COUNT  -> packages
+#                               Every occurrence of a token is checked, each with its
+#                               own PASS/FAIL line. An opening token with no well-formed
+#                               closing token (unclosed, split across lines, or a value
+#                               containing '<') is a FAIL.
 #                               Tokens absent from the file are skipped (not an error).
 #   --ignore <field>[,<field>]  Comma-separated list of fields to skip (subtractive).
 #                               Repeatable. Fields: version, agents, tests, tables,
-#                               commands, skills, packages.
-#                               Note: 'packages' is JSON-only (no CAST_* sentinel token),
-#                               so --ignore packages only affects JSON comparisons.
+#                               commands, skills, packages. A field's sentinel token is
+#                               skipped along with its JSON field.
 #                               Empty (default) ⇒ all fields checked (identical to today).
 #
 # Exit codes: 0 = all checks passed, 1 = one or more mismatches or fetch error.
@@ -179,10 +183,11 @@ _token_field() {
     CAST_DB_TABLE_COUNT) echo "tables" ;;
     CAST_COMMAND_COUNT)  echo "commands" ;;
     CAST_SKILL_COUNT)    echo "skills" ;;
+    CAST_PACKAGE_COUNT)  echo "packages" ;;
     *)                   echo "" ;;
   esac
 }
-ALL_TOKENS="CAST_VERSION CAST_AGENT_COUNT CAST_TEST_COUNT CAST_DB_TABLE_COUNT CAST_COMMAND_COUNT CAST_SKILL_COUNT"
+ALL_TOKENS="CAST_VERSION CAST_AGENT_COUNT CAST_TEST_COUNT CAST_DB_TABLE_COUNT CAST_COMMAND_COUNT CAST_SKILL_COUNT CAST_PACKAGE_COUNT"
 
 # --- Check sentinel files ---
 for sentinel_file in "${SENTINEL_FILES[@]+"${SENTINEL_FILES[@]}"}"; do
@@ -199,37 +204,50 @@ for sentinel_file in "${SENTINEL_FILES[@]+"${SENTINEL_FILES[@]}"}"; do
     field="$(_token_field "$token")"
     _field_ignored "$field" && continue
 
-    # Extract sentinel value: <!-- TOKEN -->value<!-- /TOKEN -->
-    # Use grep + sed; if token not present, skip (not an error)
+    # Token not present at all: skip (not an error)
     if ! echo "$FILE_CONTENT" | grep -qE "<!-- ${token} -->"; then
       continue
     fi
 
-    sentinel_value="$(echo "$FILE_CONTENT" | grep -oE "<!-- ${token} -->[^<]*<!-- /${token} -->" | sed -E "s|<!-- ${token} -->||;s|<!-- /${token} -->||" | head -1)"
+    # Check EVERY well-formed occurrence: <!-- TOKEN -->value<!-- /TOKEN -->.
+    # Process substitution (not a pipe) keeps FAIL_COUNT in this shell and keeps
+    # empty values; `|| true` stops a no-match grep from tripping set -e.
+    n_sentinels=0
+    while IFS= read -r sentinel_value; do
+      n_sentinels=$(( n_sentinels + 1 ))
 
-    # Determine expected canonical value for this field
-    case "$field" in
-      version)
-        expected_raw="$C_VERSION"
-        # Accept v-prefixed: strip leading 'v' from sentinel value for comparison
-        sentinel_stripped="${sentinel_value#v}"
-        if [[ "$sentinel_stripped" == "$C_VERSION" || "$sentinel_value" == "$C_VERSION" || "$sentinel_value" == "$C_VERSION_TAG" ]]; then
-          echo "  PASS  ${token} -> ${field}: $sentinel_value  (source: $sentinel_file)"
-        else
-          echo "  FAIL  ${token} -> ${field}: expected=${C_VERSION} found=${sentinel_value}  (source: $sentinel_file)"
-          FAIL_COUNT=$(( FAIL_COUNT + 1 ))
-        fi
-        continue
-        ;;
-      agents)   expected_raw="$C_AGENTS" ;;
-      tests)    expected_raw="$C_TESTS" ;;
-      tables)   expected_raw="$C_TABLES" ;;
-      commands) expected_raw="$C_COMMANDS" ;;
-      skills)   expected_raw="$C_SKILLS" ;;
-      *)        expected_raw="" ;;
-    esac
+      # Determine expected canonical value for this field
+      case "$field" in
+        version)
+          expected_raw="$C_VERSION"
+          # Accept v-prefixed: strip leading 'v' from sentinel value for comparison
+          sentinel_stripped="${sentinel_value#v}"
+          if [[ "$sentinel_stripped" == "$C_VERSION" || "$sentinel_value" == "$C_VERSION" || "$sentinel_value" == "$C_VERSION_TAG" ]]; then
+            echo "  PASS  ${token} -> ${field}: $sentinel_value  (source: $sentinel_file)"
+          else
+            echo "  FAIL  ${token} -> ${field}: expected=${C_VERSION} found=${sentinel_value}  (source: $sentinel_file)"
+            FAIL_COUNT=$(( FAIL_COUNT + 1 ))
+          fi
+          continue
+          ;;
+        agents)   expected_raw="$C_AGENTS" ;;
+        tests)    expected_raw="$C_TESTS" ;;
+        tables)   expected_raw="$C_TABLES" ;;
+        commands) expected_raw="$C_COMMANDS" ;;
+        skills)   expected_raw="$C_SKILLS" ;;
+        packages) expected_raw="$C_PACKAGES" ;;
+        *)        expected_raw="" ;;
+      esac
 
-    check_field "$sentinel_file" "${token} -> ${field}" "$expected_raw" "$sentinel_value"
+      check_field "$sentinel_file" "${token} -> ${field}" "$expected_raw" "$sentinel_value"
+    done < <(echo "$FILE_CONTENT" | grep -oE "<!-- ${token} -->[^<]*<!-- /${token} -->" | sed -E "s|<!-- ${token} -->||;s|<!-- /${token} -->||" || true)
+
+    # An opening token with no well-formed closing token is a FAIL, never a skip.
+    n_opens="$(echo "$FILE_CONTENT" | grep -oE "<!-- ${token} -->" | wc -l | tr -d ' ')"
+    if [[ "$n_opens" -ne "$n_sentinels" ]]; then
+      echo "  FAIL  ${token} -> ${field}: ${n_opens} opening token(s) but ${n_sentinels} well-formed sentinel(s)  (source: $sentinel_file)"
+      FAIL_COUNT=$(( FAIL_COUNT + 1 ))
+    fi
   done
 done
 
