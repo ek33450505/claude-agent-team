@@ -9,6 +9,8 @@
 #   5. cast-stats-drift-check.sh exits 1 with tampered --json
 #   6. cast-stats-drift-check.sh exits 0 with matching --sentinels
 #   7. cast-stats-drift-check.sh exits 1 with wrong sentinel value
+#   8. cast-stats-drift-check.sh checks CAST_PACKAGE_COUNT and every occurrence of a
+#      token, and FAILs an opening token with no well-formed closing token
 #
 # These tests do NOT touch $HOME / ~/.claude — no temp home isolation needed.
 
@@ -238,6 +240,95 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# 8. Sentinels: CAST_PACKAGE_COUNT, every occurrence, unclosed tokens
+# ---------------------------------------------------------------------------
+
+@test "cast-stats-drift-check.sh exits 1 when CAST_PACKAGE_COUNT sentinel is wrong" {
+  local fixture="${TMPDIR_STATS}/fixture-pkg-wrong.md"
+  cat > "$fixture" <<EOF
+Packages: <!-- CAST_PACKAGE_COUNT -->999<!-- /CAST_PACKAGE_COUNT -->
+EOF
+
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --sentinels "$fixture"
+  assert_failure
+  assert_output --partial "FAIL  CAST_PACKAGE_COUNT -> packages: expected="
+}
+
+@test "cast-stats-drift-check.sh passes a correct CAST_PACKAGE_COUNT sentinel" {
+  local packages
+  packages="$(jq -r '.packages' < "$CANONICAL_JSON")"
+  local fixture="${TMPDIR_STATS}/fixture-pkg.md"
+  cat > "$fixture" <<EOF
+Packages: <!-- CAST_PACKAGE_COUNT -->${packages}<!-- /CAST_PACKAGE_COUNT -->
+EOF
+
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --sentinels "$fixture"
+  assert_success
+  assert_output --partial "PASS  CAST_PACKAGE_COUNT -> packages: ${packages}"
+}
+
+@test "cast-stats-drift-check.sh exits 1 when only the second CAST_AGENT_COUNT sentinel is wrong" {
+  local agents
+  agents="$(jq -r '.agents' < "$CANONICAL_JSON")"
+  local fixture="${TMPDIR_STATS}/fixture-agents-twice.md"
+  cat > "$fixture" <<EOF
+Agents: <!-- CAST_AGENT_COUNT -->${agents}<!-- /CAST_AGENT_COUNT -->
+Again: <!-- CAST_AGENT_COUNT -->999<!-- /CAST_AGENT_COUNT -->
+EOF
+
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --sentinels "$fixture"
+  assert_failure
+  assert_output --partial "PASS  CAST_AGENT_COUNT -> agents: ${agents}"
+  assert_output --partial "FAIL  CAST_AGENT_COUNT -> agents: expected=${agents} found=999"
+}
+
+@test "cast-stats-drift-check.sh exits 1 when only the second CAST_VERSION sentinel is wrong" {
+  local version
+  version="$(jq -r '.version' < "$CANONICAL_JSON")"
+  local fixture="${TMPDIR_STATS}/fixture-version-twice.md"
+  cat > "$fixture" <<EOF
+Version: <!-- CAST_VERSION -->v${version}<!-- /CAST_VERSION -->
+Again: <!-- CAST_VERSION -->0.0.0<!-- /CAST_VERSION -->
+EOF
+
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --sentinels "$fixture"
+  assert_failure
+  assert_output --partial "PASS  CAST_VERSION -> version: v${version}"
+  assert_output --partial "FAIL  CAST_VERSION -> version: expected=${version} found=0.0.0"
+}
+
+@test "cast-stats-drift-check.sh FAILs an unclosed sentinel and keeps checking later tokens" {
+  local agents skills
+  agents="$(jq -r '.agents' < "$CANONICAL_JSON")"
+  skills="$(jq -r '.skills' < "$CANONICAL_JSON")"
+  local fixture="${TMPDIR_STATS}/fixture-unclosed.md"
+  cat > "$fixture" <<EOF
+Agents: <!-- CAST_AGENT_COUNT -->${agents}
+Skills: <!-- CAST_SKILL_COUNT -->${skills}<!-- /CAST_SKILL_COUNT -->
+EOF
+
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --sentinels "$fixture"
+  assert_failure
+  assert_output --partial "FAIL  CAST_AGENT_COUNT -> agents: 1 opening token(s) but 0 well-formed sentinel(s)"
+  assert_output --partial "PASS  CAST_SKILL_COUNT -> skills: ${skills}"
+  assert_output --partial "FAILED: 1 check(s)"
+}
+
+@test "cast-stats-drift-check.sh exits 1 when an unclosed sentinel follows a well-formed one" {
+  local agents
+  agents="$(jq -r '.agents' < "$CANONICAL_JSON")"
+  local fixture="${TMPDIR_STATS}/fixture-closed-plus-unclosed.md"
+  cat > "$fixture" <<EOF
+Agents: <!-- CAST_AGENT_COUNT -->${agents}<!-- /CAST_AGENT_COUNT -->
+Again: <!-- CAST_AGENT_COUNT -->${agents}
+EOF
+
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --sentinels "$fixture"
+  assert_failure
+  assert_output --partial "FAIL  CAST_AGENT_COUNT -> agents: 2 opening token(s) but 1 well-formed sentinel(s)"
+}
+
+# ---------------------------------------------------------------------------
 # test_files field — new key added M1-B convergence
 # ---------------------------------------------------------------------------
 
@@ -413,6 +504,20 @@ EOF
   run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --sentinels "$fixture" --ignore tests
   assert_success
   assert_output --partial "All checks PASSED"
+}
+
+@test "--ignore packages: PASSES when CAST_PACKAGE_COUNT sentinel drifts" {
+  local agents
+  agents="$(jq -r '.agents' < "$CANONICAL_JSON")"
+  local fixture="${TMPDIR_STATS}/sentinel-packages-ignore.md"
+  cat > "$fixture" <<EOF
+Agents: <!-- CAST_AGENT_COUNT -->${agents}<!-- /CAST_AGENT_COUNT -->
+Packages: <!-- CAST_PACKAGE_COUNT -->99999<!-- /CAST_PACKAGE_COUNT -->
+EOF
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --sentinels "$fixture" --ignore packages
+  assert_success
+  assert_output --partial "All checks PASSED"
+  refute_output --partial "CAST_PACKAGE_COUNT"
 }
 
 # ---------------------------------------------------------------------------
