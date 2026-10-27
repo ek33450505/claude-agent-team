@@ -121,6 +121,12 @@ def _pre_consolidate_backup(db_path: str) -> int:
     return 0
 
 
+# Busy-wait for cast.db's write lock, in seconds. A VACUUM or other long writer can hold it for
+# a long time on the ~1 GB DB, and on a sleeping Mac SQLite's busy timeout only advances while
+# the process is awake: the old 10 s ran out across three DarkWakes on 2026-10-25 (exit 1).
+# Consolidation itself takes seconds, so a long wait costs a weekly unattended run nothing.
+LOCK_WAIT_S = 300
+
 SAFE_COL = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*\Z')
 
 
@@ -382,7 +388,7 @@ def main():
         sys.exit(1)
 
     try:
-        conn = sqlite3.connect(db_path, timeout=10)
+        conn = sqlite3.connect(db_path, timeout=LOCK_WAIT_S)
     except sqlite3.Error as e:
         print(f"ERROR: Cannot connect to {db_path}: {e}", file=sys.stderr)
         sys.exit(1)
