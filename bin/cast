@@ -4723,7 +4723,7 @@ Clean up accumulated CAST files:
   Plans older than 7 days       → archived to plans/archive/YYYY-MM/
   Events older than 3 days      → deleted
   Logs older than 7 days / >1MB → rotated (max 4 rotations)
-  cast.db agent_runs >30 days   → pruned + VACUUM
+  cast.db agent_runs >30 days   → pruned
   Briefings older than 14 days  → archived to briefings/archive/YYYY-MM/
   Agent status older than 24h   → deleted
   Orchestrator checkpoints >7d  → deleted
@@ -4812,7 +4812,7 @@ USAGE
     done
   fi
 
-  # 4. cast.db — prune old agent_runs, VACUUM
+  # 4. cast.db — prune old agent_runs (no VACUUM; see below)
   case "$(_db_state)" in
     ok)
       # COUNT and DELETE share one WHERE; the GLOB keeps a non-ISO started_at row (which the
@@ -4864,11 +4864,10 @@ PYEOF
           fi
         fi
       fi
-      if [ "$dry_run" -eq 0 ]; then
-        sqlite3 "$CAST_DB_PATH" "VACUUM;" 2>/dev/null
-      else
-        _info "  Would VACUUM cast.db"
-      fi
+      # No VACUUM here: cast-db-prune.py owns it, gated on a >=25% freelist. An unconditional
+      # nightly VACUUM rewrote the whole ~1 GB cast.db and held its write lock throughout, long
+      # enough on a sleeping Mac to fail com.cast.memory-consolidate (2026-10-25), and made
+      # litestream store a ~0.5 GB LTX file every day.
       ;;
     unreadable) _warn "cast.db present but unreadable — skipping DB maintenance" ;;
     missing) ;;

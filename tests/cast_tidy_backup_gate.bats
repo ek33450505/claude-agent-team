@@ -17,6 +17,7 @@
 #       backup's exit code)
 #   (c) --dry-run         -> deletes nothing AND does not invoke the backup
 #       script at all
+#   (d) no VACUUM         -> tidy leaves the freelist alone (cast-db-prune.py owns VACUUM)
 
 setup() {
   load 'helpers/setup'
@@ -160,4 +161,34 @@ PYEOF
   # Well under the 10s sleep, proving the run was actually bounded rather
   # than happening to finish quickly for an unrelated reason.
   [ "$elapsed" -lt 8 ]
+}
+
+@test "cast tidy: does not VACUUM cast.db (free pages survive; cast-db-prune owns VACUUM)" {
+  # Some sqlite3 builds (the macOS CI runner's) create DBs with auto_vacuum on, which frees dropped pages
+  # at once. Force NONE (VACUUM applies the change to the DB setup() created) so a freelist can exist.
+  sqlite3 "$DB_PATH" 'PRAGMA auto_vacuum=NONE; VACUUM;'
+  [ "$(sqlite3 "$DB_PATH" 'PRAGMA auto_vacuum;')" = "0" ]
+  sqlite3 "$DB_PATH" "CREATE TABLE filler (b BLOB); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<200) INSERT INTO filler SELECT randomblob(4000) FROM n; DROP TABLE filler;"
+  local before after
+  before="$(sqlite3 "$DB_PATH" 'PRAGMA freelist_count;')"
+  [ "$before" -ge 100 ]
+
+  cat > "${CAST_SCRIPTS_DIR}/cast-db-backup.py" <<'PYEOF'
+#!/usr/bin/env python3
+import sys
+print('{"backup_path": "/fake/backup.db"}')
+sys.exit(0)
+PYEOF
+  chmod +x "${CAST_SCRIPTS_DIR}/cast-db-backup.py"
+
+  run bash "$CAST_BIN" tidy
+  [ "$status" -eq 0 ]
+  after="$(sqlite3 "$DB_PATH" 'PRAGMA freelist_count;')"
+  [ "$after" -ge "$before" ]
+  [ "$(_row_count)" -eq 0 ]
+
+  run bash "$CAST_BIN" tidy --dry-run
+  [ "$status" -eq 0 ]
+  [ "$(sqlite3 "$DB_PATH" 'PRAGMA freelist_count;')" -ge "$before" ]
+  [[ "$output" != *VACUUM* ]] || return 1
 }

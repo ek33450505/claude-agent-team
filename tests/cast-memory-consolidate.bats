@@ -18,6 +18,7 @@
 #   (f) op_archive                  → low-importance rows moved; missing table warned
 #   (g) op_promote                  → retrieval_count >= 5 bumps importance; missing col skips
 #   (h) JSON output shape           → timestamp present, all required keys
+#   (k) lock wait                   → a write lock held >10 s does not fail the run (LOCK_WAIT_S)
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -163,6 +164,7 @@ setup() {
 }
 
 teardown() {
+  [[ -f "$BATS_TEST_TMPDIR/holder.pid" ]] && kill "$(cat "$BATS_TEST_TMPDIR/holder.pid")" 2>/dev/null || true
   teardown_temp_home
 }
 
@@ -717,4 +719,35 @@ assert d["decayed"] == 0 and d["merged"] == 0 and d["archived"] == 0 and d["prom
   [ "$after_count" -eq "$before_count" ]
 
   rm -rf "$tmp_dir"
+}
+
+# ---------------------------------------------------------------------------
+# (k) A write lock held longer than the old 10 s busy timeout must not fail the run
+# ---------------------------------------------------------------------------
+
+@test "(k) lock wait: a write lock held longer than the old 10 s timeout does not fail the run" {
+  init_db
+  sqlite3 "$CAST_DB_PATH" "PRAGMA journal_mode=WAL;" >/dev/null
+  insert_memory "lock-wait-mem" "0.05" "0.0"
+
+  python3 -c 'import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1], isolation_level=None); c.execute("BEGIN IMMEDIATE"); c.execute("INSERT INTO agent_memories (agent, name) VALUES (?, ?)", ("lock-holder", "lock-holder-mem")); open(sys.argv[2],"w").close(); time.sleep(12); c.execute("COMMIT"); c.close()' "$CAST_DB_PATH" "$BATS_TEST_TMPDIR/holder.ready" >/dev/null 2>&1 3>&- &
+  local holder=$!
+  echo "$holder" > "$BATS_TEST_TMPDIR/holder.pid"
+
+  local i
+  for i in $(seq 1 100); do
+    [[ -f "$BATS_TEST_TMPDIR/holder.ready" ]] && break
+    sleep 0.1
+  done
+  [ -f "$BATS_TEST_TMPDIR/holder.ready" ]
+
+  run_with_stderr
+  assert_success
+  refute_output --partial "database is locked"
+  [ "$(db_query "SELECT COUNT(*) FROM agent_memories WHERE name='lock-wait-mem';")" -eq 0 ]
+  [ "$(db_query "SELECT COUNT(*) FROM archived_memories WHERE name='lock-wait-mem';")" -eq 1 ]
+
+  wait "$holder" || true
+  rm -f "$BATS_TEST_TMPDIR/holder.pid"
+  [ "$(db_query "SELECT COUNT(*) FROM agent_memories WHERE name='lock-holder-mem';")" -eq 1 ]
 }
