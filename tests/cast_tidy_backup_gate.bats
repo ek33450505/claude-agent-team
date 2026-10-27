@@ -164,6 +164,9 @@ PYEOF
 }
 
 @test "cast tidy: does not VACUUM cast.db (free pages survive; cast-db-prune owns VACUUM)" {
+  # Some sqlite3 builds (the macOS CI runner's) create DBs with auto_vacuum on, which frees dropped pages
+  # at once. Force NONE (VACUUM applies the change to the DB setup() created) so a freelist can exist.
+  sqlite3 "$DB_PATH" 'PRAGMA auto_vacuum=NONE; VACUUM;'
   [ "$(sqlite3 "$DB_PATH" 'PRAGMA auto_vacuum;')" = "0" ]
   sqlite3 "$DB_PATH" "CREATE TABLE filler (b BLOB); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<200) INSERT INTO filler SELECT randomblob(4000) FROM n; DROP TABLE filler;"
   local before after
