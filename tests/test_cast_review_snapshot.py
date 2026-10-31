@@ -25,7 +25,23 @@ if _SCRIPTS_DIR not in sys.path:
 import cast_review_snapshot as crs  # noqa: E402
 
 _MIGRATION = _REPO / "scripts" / "migrations" / "037_review_snapshots.sql"
+_MIGRATION_039 = _REPO / "scripts" / "migrations" / "039_review_mode_and_source.sql"
+
+
+def _migrate(conn):
+    """Apply 037 then 039 (mode column), tolerating re-runs as cast-migrate.py does."""
+    conn.executescript(_MIGRATION.read_text())
+    sql = "\n".join(l for l in _MIGRATION_039.read_text().splitlines() if not l.strip().startswith("--"))
+    for body in (b.strip() for b in sql.split(";")):
+        if not body:
+            continue
+        try:
+            conn.execute(body)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc) and "no such table" not in str(exc):
+                raise
 _DB_INIT = _REPO / "scripts" / "cast-db-init.sh"
+_GATE = _REPO / "scripts" / "cast-review-gate.py"
 
 
 def _clean_env(home):
@@ -98,7 +114,7 @@ class TakeSnapshotTests(_TmpCase):
     def test_clean_repo_has_empty_file_set(self):
         repo = self.committed_repo()
         snap = crs.take_snapshot(repo)
-        self.assertEqual(snap, {"repo_root": repo, "files": {}})
+        self.assertEqual(snap, {"repo_root": repo, "files": {}, "modes": {}})
 
     def test_modified_added_deleted_untracked_ignored(self):
         repo = self.committed_repo()
@@ -254,9 +270,28 @@ class TakeSnapshotTests(_TmpCase):
 
 class StableFilesTests(unittest.TestCase):
     def test_keeps_only_identical_entries(self):
-        a = {"repo_root": "/r", "files": {"a": "1", "b": "2", "c": "3", "d": "DELETED"}}
-        b = {"repo_root": "/r", "files": {"a": "1", "b": "CHANGED", "d": "DELETED", "e": "9"}}
+        m = {"a": "100644", "b": "100644", "c": "100644"}
+        a = {"repo_root": "/r", "files": {"a": "1", "b": "2", "c": "3", "d": "DELETED"}, "modes": m}
+        b = {"repo_root": "/r", "files": {"a": "1", "b": "CHANGED", "d": "DELETED", "e": "9"},
+             "modes": dict(m, e="100644")}
         self.assertEqual(crs.stable_files(a, b), {"a": "1", "d": "DELETED"})
+
+    def test_mode_flip_or_missing_mode_is_not_stable(self):
+        a = {"repo_root": "/r", "files": {"x": "1", "y": "2", "z": "3"},
+             "modes": {"x": "100644", "y": "100644", "z": "100644"}}
+        b = {"repo_root": "/r", "files": {"x": "1", "y": "2", "z": "3"},
+             "modes": {"x": "100755", "y": "100644"}}  # x exec-flipped, z has no stop mode
+        self.assertEqual(crs.stable_files(a, b), {"y": "2"})
+
+    def test_old_format_snapshot_without_modes_has_nothing_stable(self):
+        old = {"repo_root": "/r", "files": {"x": "1", "gone": "DELETED"}}
+        new = {"repo_root": "/r", "files": {"x": "1", "gone": "DELETED"}, "modes": {"x": "100644"}}
+        self.assertEqual(crs.stable_files(old, new), {"gone": "DELETED"})
+        self.assertEqual(crs.stable_files(new, old), {"gone": "DELETED"})
+
+    def test_invalid_modes_value_makes_paths_unstable(self):
+        a = {"repo_root": "/r", "files": {"x": "1"}, "modes": {"x": "100666"}}
+        self.assertEqual(crs.stable_files(a, a), {})
 
     def test_requires_same_repo_root(self):
         a = {"repo_root": "/r1", "files": {"a": "1"}}
@@ -462,7 +497,7 @@ class RecordTests(_TmpCase):
         super().setUp()
         self.db = os.path.join(self.tmp, "cast.db")
         conn = sqlite3.connect(self.db)
-        conn.executescript(_MIGRATION.read_text())
+        _migrate(conn)
         conn.close()
 
     def rec(self, **over):
@@ -627,14 +662,14 @@ class SchemaTests(_TmpCase):
             check=True)
         db_mig = os.path.join(self.tmp, "mig.db")
         conn = sqlite3.connect(db_mig)
-        conn.executescript(_MIGRATION.read_text())
-        conn.executescript(_MIGRATION.read_text())  # idempotent
+        _migrate(conn)
+        _migrate(conn)  # idempotent
         conn.close()
 
         def cols(path, table):
             c = sqlite3.connect(path)
             try:
-                return [r[1:4] for r in c.execute("PRAGMA table_info(%s)" % table)]
+                return sorted(r[1:4] for r in c.execute("PRAGMA table_info(%s)" % table))
             finally:
                 c.close()
         for t in ("review_snapshots", "review_snapshot_files"):
@@ -643,7 +678,7 @@ class SchemaTests(_TmpCase):
     def test_cascade_delete(self):
         db = os.path.join(self.tmp, "m.db")
         conn = sqlite3.connect(db)
-        conn.executescript(_MIGRATION.read_text())
+        _migrate(conn)
         conn.close()
         self.assertTrue(crs.record(db, session_id=None, agent_id=None, reviewer="r",
                                    repo_root="/r", decision="APPROVE", started_at=None,
@@ -662,32 +697,33 @@ class StartPersistenceTests(_TmpCase):
         self.sd = os.path.join(self.tmp, "state", "review-snapshots")
         self.snap = {"repo_root": "/r", "files": {"a": "1" * 40, "b": "DELETED"}}
         self.K = dict(session_id="sess-1", reviewer="code-reviewer")
+        self.snaps = {"/r": self.snap}
 
     def test_round_trip_mode_and_removal(self):
-        self.assertTrue(crs.save_start(self.sd, "agent-1_A", self.snap, **self.K))
+        self.assertTrue(crs.save_start(self.sd, "agent-1_A", self.snaps, **self.K))
         path = os.path.join(self.sd, "agent-1_A.json")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(self.sd).st_mode), 0o700)
         got = crs.load_start(self.sd, "agent-1_A", **self.K)
         self.assertRegex(got.pop("started_at"), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
-        self.assertEqual(got, self.snap)
+        self.assertEqual(got, {"snaps": self.snaps})
         self.assertFalse(os.path.exists(path))
         self.assertIsNone(crs.load_start(self.sd, "agent-1_A", **self.K))  # consumed
         self.assertEqual([n for n in os.listdir(self.sd)], [])    # no tmp litter
 
     def test_bad_agent_ids_rejected(self):
         for bad in ("", "../x", "a/b", "a b", "a.b", "x" * 129, None, 5, "a\n"):
-            self.assertFalse(crs.save_start(self.sd, bad, self.snap, **self.K), repr(bad))
+            self.assertFalse(crs.save_start(self.sd, bad, self.snaps, **self.K), repr(bad))
             self.assertIsNone(crs.load_start(self.sd, bad, **self.K), repr(bad))
-        self.assertTrue(crs.save_start(self.sd, "x" * 128, self.snap, **self.K))
+        self.assertTrue(crs.save_start(self.sd, "x" * 128, self.snaps, **self.K))
 
     def test_overwrite_replaces_atomically(self):
-        self.assertTrue(crs.save_start(self.sd, "a1", self.snap, **self.K))
-        newer = {"repo_root": "/r2", "files": {}}
+        self.assertTrue(crs.save_start(self.sd, "a1", self.snaps, **self.K))
+        newer = {"/r2": {"repo_root": "/r2", "files": {}}}
         self.assertTrue(crs.save_start(self.sd, "a1", newer, **self.K))
         got = crs.load_start(self.sd, "a1", **self.K)
         got.pop("started_at")
-        self.assertEqual(got, newer)
+        self.assertEqual(got, {"snaps": newer})
 
     def test_symlinked_state_file_refused(self):
         os.makedirs(self.sd, mode=0o700)
@@ -703,13 +739,13 @@ class StartPersistenceTests(_TmpCase):
         os.makedirs(real, mode=0o700)
         link = os.path.join(self.tmp, "linkdir")
         os.symlink(real, link)
-        self.assertFalse(crs.save_start(link, "a1", self.snap, **self.K))
+        self.assertFalse(crs.save_start(link, "a1", self.snaps, **self.K))
         self.assertEqual(os.listdir(real), [])
 
     def test_writable_state_dir_refused(self):
         os.makedirs(self.sd, mode=0o700)
         os.chmod(self.sd, 0o777)
-        self.assertFalse(crs.save_start(self.sd, "a1", self.snap, **self.K))
+        self.assertFalse(crs.save_start(self.sd, "a1", self.snaps, **self.K))
 
     def test_oversized_file_refused(self):
         os.makedirs(self.sd, mode=0o700)
@@ -717,8 +753,8 @@ class StartPersistenceTests(_TmpCase):
             with open(os.path.join(self.sd, "big.json"), "w") as fh:
                 fh.write(json.dumps(self.snap) + " " * 100)
             self.assertIsNone(crs.load_start(self.sd, "big", **self.K))
-            self.assertFalse(crs.save_start(self.sd, "big2", {
-                "repo_root": "/r", "files": {"k%d" % i: "v" for i in range(20)}}, **self.K))
+            self.assertFalse(crs.save_start(self.sd, "big2", {"/r": {
+                "repo_root": "/r", "files": {"k%d" % i: "v" for i in range(20)}}}, **self.K))
 
     def test_malformed_content_is_none(self):
         os.makedirs(self.sd, mode=0o700)
@@ -733,14 +769,14 @@ class StartPersistenceTests(_TmpCase):
         for kw in (dict(session_id="other", reviewer="code-reviewer"),
                    dict(session_id="sess-1", reviewer="security"),
                    dict(session_id=None, reviewer="code-reviewer")):
-            self.assertTrue(crs.save_start(self.sd, "a1", self.snap, **self.K))
+            self.assertTrue(crs.save_start(self.sd, "a1", self.snaps, **self.K))
             self.assertIsNone(crs.load_start(self.sd, "a1", **kw), kw)
             self.assertFalse(os.path.exists(os.path.join(self.sd, "a1.json")))  # consumed
-        self.assertTrue(crs.save_start(self.sd, "a1", self.snap, session_id=None,
+        self.assertTrue(crs.save_start(self.sd, "a1", self.snaps, session_id=None,
                                        reviewer="code-reviewer"))
         got = crs.load_start(self.sd, "a1", session_id=None, reviewer="code-reviewer")
         got.pop("started_at")
-        self.assertEqual(got, self.snap)
+        self.assertEqual(got, {"snaps": self.snaps})
 
     def test_bare_snapshot_file_without_binding_envelope_is_refused(self):
         os.makedirs(self.sd, mode=0o700)
@@ -769,10 +805,47 @@ class StartPersistenceTests(_TmpCase):
         t = __import__("time").time() - 7200
         os.utime(old, (t, t))
         os.utime(keep, (t, t))
-        self.assertTrue(crs.save_start(self.sd, "a1", self.snap, **self.K))
+        self.assertTrue(crs.save_start(self.sd, "a1", self.snaps, **self.K))
         self.assertFalse(os.path.exists(old))
         self.assertTrue(os.path.exists(new))
         self.assertTrue(os.path.exists(keep))
+
+    def _write_env(self, name, env):
+        os.makedirs(self.sd, mode=0o700, exist_ok=True)
+        with open(os.path.join(self.sd, name + ".json"), "w") as fh:
+            json.dump(env, fh)
+
+    def test_v1_envelope_still_accepted(self):
+        self._write_env("v1", {"session_id": "sess-1", "reviewer": "code-reviewer",
+                               "repo_root": "/r", "snap": self.snap,
+                               "started_at": "2026-10-30T00:00:00Z"})
+        got = crs.load_start(self.sd, "v1", **self.K)
+        self.assertEqual(got, {"started_at": "2026-10-30T00:00:00Z", "snaps": {"/r": self.snap}})
+
+    def test_v2_snap_key_must_match_repo_root(self):
+        self._write_env("v2bad", {"v": 2, "session_id": "sess-1", "reviewer": "code-reviewer",
+                                  "snaps": {"/other": self.snap}, "started_at": "x"})
+        self.assertIsNone(crs.load_start(self.sd, "v2bad", **self.K))
+
+    def test_save_stops_adding_roots_at_size_cap_first_root_survives(self):
+        snaps = {r: {"repo_root": r, "files": {"k%d" % i: "v" * 40 for i in range(20)}}
+                 for r in ("/a", "/b", "/c")}
+        one = len(json.dumps({"v": 2, "session_id": "sess-1", "reviewer": "code-reviewer",
+                              "snaps": {"/a": snaps["/a"]}, "started_at": "2026-10-30T00:00:00Z"}))
+        with mock.patch.object(crs, "MAX_STATE_BYTES", one + 100):
+            self.assertTrue(crs.save_start(self.sd, "cap", snaps, **self.K))
+            got = crs.load_start(self.sd, "cap", **self.K)
+        self.assertEqual(list(got["snaps"]), ["/a"])
+
+    def test_modes_round_trip_and_invalid_modes_dropped(self):
+        good = {"repo_root": "/r", "files": {"a": "1" * 40}, "modes": {"a": "100755"}}
+        self.assertTrue(crs.save_start(self.sd, "m1", {"/r": good}, **self.K))
+        self.assertEqual(crs.load_start(self.sd, "m1", **self.K)["snaps"]["/r"]["modes"], {"a": "100755"})
+        self._write_env("m2", {"v": 2, "session_id": "sess-1", "reviewer": "code-reviewer",
+                               "snaps": {"/r": dict(good, modes={"a": "777"})}, "started_at": "x"})
+        got = crs.load_start(self.sd, "m2", **self.K)["snaps"]["/r"]
+        self.assertNotIn("modes", got)
+        self.assertEqual(crs.stable_files(got, got), {})  # no modes -> not stable
 
     def test_default_state_dir(self):
         self.assertTrue(crs.default_state_dir().endswith(
@@ -782,6 +855,168 @@ class StartPersistenceTests(_TmpCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorktreeTests(_TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.repo = self.make_repo()
+        self.write(self.repo, "a.txt", b"a\n")
+        self.git(self.repo, "add", "-A")
+        self.git(self.repo, "commit", "-q", "-m", "init")
+        self.wt1 = os.path.join(self.tmp, "wt1")
+        self.wt2 = os.path.join(self.tmp, "wt2")
+        self.git(self.repo, "worktree", "add", "-q", "-b", "b1", self.wt1)
+        self.git(self.repo, "worktree", "add", "-q", "-b", "b2", self.wt2)
+
+    def test_cwd_root_first_then_linked(self):
+        got = crs.list_worktrees(self.repo)
+        self.assertEqual(got[0], os.path.realpath(self.repo))
+        self.assertEqual(sorted(got[1:]), sorted(os.path.realpath(w) for w in (self.wt1, self.wt2)))
+        # started from a linked worktree: that one is first
+        self.assertEqual(crs.list_worktrees(self.wt2)[0], os.path.realpath(self.wt2))
+
+    def test_prunable_worktree_skipped(self):
+        shutil.rmtree(self.wt1)
+        got = crs.list_worktrees(self.repo)
+        self.assertEqual(got, [os.path.realpath(self.repo), os.path.realpath(self.wt2)])
+
+    def test_recency_orders_linked_worktrees(self):
+        idx = {self.wt1: 1000, self.wt2: 2000}
+        for wt, t in idx.items():
+            with open(os.path.join(wt, ".git")) as fh:
+                gd = fh.read().split(":", 1)[1].strip()
+            os.utime(os.path.join(gd, "index"), (t, t))
+        got = crs.list_worktrees(self.repo)
+        self.assertEqual(got[1:], [os.path.realpath(self.wt2), os.path.realpath(self.wt1)])
+
+    def test_non_repo_is_none_and_failure_falls_back_to_toplevel(self):
+        self.assertIsNone(crs.list_worktrees(""))
+        with mock.patch.object(crs, "_git", return_value=None):
+            self.assertEqual(crs.list_worktrees(self.repo), [os.path.realpath(self.repo)])
+
+    def test_record_parse_cap(self):
+        with mock.patch.object(crs, "MAX_WORKTREE_RECORDS", 2):
+            self.assertEqual(len(crs.list_worktrees(self.repo)), 2)
+
+    def test_spent_deadline_skips_recency_stat(self):
+        with mock.patch.object(crs, "_worktree_recency", side_effect=AssertionError("stat")):
+            got = crs.list_worktrees(self.repo, timeout=0)
+        self.assertEqual(got, [os.path.realpath(self.repo)])
+
+    def test_repo_identity_same_common_dir_across_worktrees(self):
+        a = crs.repo_identity(self.repo)
+        b = crs.repo_identity(os.path.join(self.wt1, "no", "such", "file.py"))
+        self.assertEqual(a[1], b[1])
+        self.assertEqual(b[0], os.path.realpath(self.wt1))
+        self.assertIsNone(crs.repo_identity(self.tmp))
+        self.assertIsNone(crs.repo_identity(self.repo, timeout=0))
+
+    def test_cap(self):
+        with mock.patch.object(crs, "MAX_WORKTREES", 2):
+            self.assertEqual(len(crs.list_worktrees(self.repo)), 2)
+
+    def test_take_snapshots_from_main_covers_dirty_linked_worktree(self):
+        self.write(self.wt1, "a.txt", b"dirty in wt1\n")
+        snaps = crs.take_snapshots(self.repo, deadline_s=30)
+        self.assertEqual(list(snaps)[0], os.path.realpath(self.repo))
+        self.assertEqual(snaps[os.path.realpath(self.repo)]["files"], {})
+        self.assertEqual(list(snaps[os.path.realpath(self.wt1)]["files"]), ["a.txt"])
+        self.assertEqual(snaps[os.path.realpath(self.wt2)]["files"], {})
+
+    def test_take_snapshots_none_when_deadline_spent(self):
+        self.assertIsNone(crs.take_snapshots(self.repo, deadline_s=0))
+
+    def test_cli_start_stores_all_worktrees(self):
+        self.write(self.wt2, "n.txt", b"n\n")
+        crs.main(["start", "--agent-id", "ag9", "--session-id", "s", "--reviewer", "security",
+                  "--cwd", self.repo])
+        got = crs.load_start(crs.default_state_dir(), "ag9", session_id="s", reviewer="security")
+        self.assertEqual(set(got["snaps"]),
+                         {os.path.realpath(w) for w in (self.repo, self.wt1, self.wt2)})
+        self.assertEqual(list(got["snaps"][os.path.realpath(self.wt2)]["files"]), ["n.txt"])
+
+
+class ModeTests(_TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.repo = self.make_repo()
+        self.write(self.repo, "a.txt", b"a\n")
+        self.git(self.repo, "add", "-A")
+        self.git(self.repo, "commit", "-q", "-m", "init")
+
+    def test_take_snapshot_records_git_modes(self):
+        self.write(self.repo, "plain.txt", b"p\n")
+        ex = self.write(self.repo, "run.sh", b"#!/bin/sh\n")
+        os.chmod(ex, 0o755)
+        os.symlink("plain.txt", os.path.join(self.repo, "lnk"))
+        self.write(self.repo, "a.txt", b"changed\n")
+        os.unlink(os.path.join(self.repo, "a.txt"))
+        snap = crs.take_snapshot(self.repo)
+        self.assertEqual(snap["modes"], {"plain.txt": "100644", "run.sh": "100755", "lnk": "120000"})
+        self.assertEqual(snap["files"]["a.txt"], "DELETED")
+        self.assertNotIn("a.txt", snap["modes"])  # DELETED paths carry no mode
+
+    def test_exec_bit_flip_between_start_and_stop_not_stable(self):
+        full = self.write(self.repo, "a.txt", b"edited\n")
+        start = crs.take_snapshot(self.repo)
+        os.chmod(full, 0o755)
+        stop = crs.take_snapshot(self.repo)
+        self.assertEqual(start["files"], stop["files"])  # same blob
+        self.assertEqual(crs.stable_files(start, stop), {})
+
+    def test_record_writes_mode_column_and_null_when_absent(self):
+        db = os.path.join(self.tmp, "m.db")
+        conn = sqlite3.connect(db)
+        _migrate(conn)
+        conn.close()
+        kw = dict(session_id="s", agent_id="a", reviewer="code-reviewer", repo_root="/r",
+                  decision="APPROVE", started_at=None, ended_at=None)
+        files = {"x": "a" * 40, "y": "b" * 40, "gone": "DELETED"}
+        self.assertTrue(crs.record(db, files=files, modes={"x": "100755", "gone": "100644"}, **kw))
+        conn = sqlite3.connect(db)
+        got = dict((p, m) for p, m in conn.execute("SELECT path, mode FROM review_snapshot_files"))
+        conn.close()
+        self.assertEqual(got, {"x": "100755", "y": None, "gone": None})
+
+    def test_record_fails_on_db_without_mode_column(self):
+        db = os.path.join(self.tmp, "old.db")
+        conn = sqlite3.connect(db)
+        conn.executescript(_MIGRATION.read_text())  # 037 only
+        conn.close()
+        kw = dict(session_id="s", agent_id="a", reviewer="code-reviewer", repo_root="/r",
+                  started_at=None, ended_at=None)
+        self.assertFalse(crs.record(db, decision="APPROVE", files={"x": "a" * 40},
+                                    modes={"x": "100644"}, **kw))
+        self.assertTrue(crs.record_degraded_block(db, **kw))  # repo-scope BLOCK needs no mode
+
+    def test_round_trip_through_the_real_gate(self):
+        db = os.path.join(self.tmp, "rt.db")
+        subprocess.run(["bash", str(_DB_INIT), "--db", db], env=dict(os.environ, HOME=self.home),
+                       capture_output=True, text=True, timeout=120, check=True)
+        full = self.write(self.repo, "a.txt", b"reviewed\n")
+        start = crs.take_snapshot(self.repo)
+        stop = crs.take_snapshot(self.repo)
+        files = crs.stable_files(start, stop)
+        self.assertEqual(list(files), ["a.txt"])
+        self.assertTrue(crs.record(db, session_id="s", agent_id="a", reviewer="code-reviewer",
+                                   repo_root=stop["repo_root"], decision="APPROVE",
+                                   started_at="2026-10-30T00:00:00Z", ended_at="2026-10-30T00:01:00Z",
+                                   files=files, modes=crs.modes_for(files, stop)))
+        self.git(self.repo, "add", "a.txt")
+        env = dict(_clean_env(self.home), CAST_DB_PATH=db)
+
+        def gate():
+            r = subprocess.run(["python3", "-I", "-E", "-s", str(_GATE)], cwd=self.repo, env=env,
+                               capture_output=True, text=True, timeout=60)
+            return r.stdout.strip()
+
+        self.assertIn("approved=1", gate())
+        os.chmod(full, 0o755)
+        self.git(self.repo, "add", "a.txt")
+        out = gate()
+        self.assertIn("approved=0", out)
+        self.assertIn("unreviewed=1", out)
 
 
 class IsReviewerTests(unittest.TestCase):
@@ -861,8 +1096,9 @@ class CliStartTests(_TmpCase):
                        "--reviewer", "code-reviewer", "--cwd", self.repo])
         self.assertEqual(rc, 0)
         self.assertTrue(self.sd.startswith(self.home))
-        snap = crs.load_start(self.sd, "ag1", session_id="s1", reviewer="code-reviewer")
-        self.assertEqual(snap["files"], {"a.txt": self.blob(self.repo, "a.txt")})
+        got = crs.load_start(self.sd, "ag1", session_id="s1", reviewer="code-reviewer")
+        self.assertEqual(got["snaps"][os.path.realpath(self.repo)]["files"],
+                         {"a.txt": self.blob(self.repo, "a.txt")})
 
     def test_never_raises_and_exits_zero(self):
         self.assertEqual(crs.main(["start"]), 0)  # missing required args

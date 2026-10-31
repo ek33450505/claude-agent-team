@@ -653,13 +653,16 @@ Bash work). The Write/Edit policy gate (`evaluate`) FAILS CLOSED on an internal 
 CLAUDE_SUBPROCESS=1 (managed/headless sub-claude) skips ONLY the Write/Edit policy engine + TTL sweep; the git commit/push/stash guards run in EVERY context (a subagent must not bypass the irreversibility guards).
 """
 import datetime
+import importlib.util
 import json
 import os
+import pwd
 import re
 import shlex
 import stat
 import subprocess
 import sys
+import time
 
 # --- git global-option tolerance (shared by every git pattern) --------------
 # Matches: -C <path>, --no-pager, -c <cfg>, --git-dir=<d>, --work-tree=<w>
@@ -3357,6 +3360,10 @@ def _hatch_session_id_uncached(repo: str) -> str:
 _HOOK_CTX: dict = {}
 _HOOK_CTX_FIELDS = ('session_id', 'agent_type', 'agent_id', 'tool_use_id')
 _HOOK_CTX_RE = re.compile(r'^[A-Za-z0-9._:@/-]{1,128}$')
+# The payload's `cwd` -- the directory the Bash tool's shell runs in -- validated (absolute str,
+# no NUL, a real directory, realpath'd) or ''. The review gate resolves relative paths against
+# it, never against the guard process's own cwd. '' means unknown (the gate fails closed).
+_HOOK_CWD: str = ''
 
 
 def set_hook_context(data) -> None:
@@ -3364,11 +3371,17 @@ def set_hook_context(data) -> None:
 
     A field is kept only if it is a `str` fully matching `^[A-Za-z0-9._:@/-]{1,128}$`
     (`fullmatch`, so a trailing newline is rejected), else ''. A non-dict yields {}."""
-    global _HOOK_CTX
+    global _HOOK_CTX, _HOOK_CWD
+    _HOOK_CWD = ''
     try:
         if not isinstance(data, dict):
             _HOOK_CTX = {}
             return
+        cwd = data.get('cwd')
+        if isinstance(cwd, str) and cwd and '\0' not in cwd and os.path.isabs(cwd):
+            real = os.path.realpath(cwd)
+            if os.path.isdir(real):
+                _HOOK_CWD = real
         ctx = {}
         for key in _HOOK_CTX_FIELDS:
             val = data.get(key)
@@ -3379,8 +3392,9 @@ def set_hook_context(data) -> None:
 
 
 def clear_hook_context() -> None:
-    global _HOOK_CTX
+    global _HOOK_CTX, _HOOK_CWD
     _HOOK_CTX = {}
+    _HOOK_CWD = ''
 
 
 _SHA_RE = re.compile(r'^[0-9a-f]{40}([0-9a-f]{24})?$')
@@ -5606,7 +5620,8 @@ def _git_evaluate(command: str):
     cap-sentinel row has the count and the command's rough timing only; the
     per-hatch detail for anything past the cap is gone, not just deferred.
     """
-    global _EVAL_MEMO
+    global _EVAL_MEMO, _GUARD_ENTRY
+    _GUARD_ENTRY = time.monotonic()   # the review gate measures its hook budget from here
     suppressed_counter = [0]
 
     def _emit_cap_sentinel():
@@ -5636,6 +5651,378 @@ def _git_evaluate(command: str):
         return result
     finally:
         _EVAL_MEMO = None
+
+
+# --- content-bound review gate on the commit allow path (U4) ----------------
+# "warn": log a review_gate_decisions row and never block. Flipping this to "enforce" is a
+# separate one-line PATCH after >= 7 days of source='guard' rows.
+_REVIEW_GATE_MODE = "warn"
+# The PreToolUse dispatcher's hook timeout is 5 s with onFailure=block
+# (managed-settings.d/25-hooks-security.json), so a slow gate would BLOCK even in warn mode.
+_REVIEW_GATE_BUDGET_S = 2.0
+_REVIEW_GATE_ROW_TIMEOUT_S = 0.5
+# Whole-hook ceiling the gate may use, measured from `_git_evaluate` entry (hook timeout is 5 s).
+_REVIEW_GATE_HOOK_BUDGET_S = 4.0
+_GUARD_ENTRY = None
+# Test seams (module attributes, never env: HOME, CAST_DB_PATH and PATH are agent-steerable).
+_REVIEW_GATE_TEST_HOME = None
+_REVIEW_GATE_MODULE_PATH = None
+_REVIEW_GATE_MODULES: dict = {}
+
+# commit options the check can model (it reads the index BEFORE the command runs, so nothing
+# that changes which content gets committed -- -a, -i, -o, -p, pathspecs -- is allowed)
+_RG_FLAGS = frozenset((
+    '-q', '--quiet', '-s', '--signoff', '--no-edit', '--amend', '--allow-empty', '-S',
+    '--gpg-sign', '--no-gpg-sign', '-v', '--verbose'))
+_RG_VALUE_OPTS = frozenset(('-F', '--file', '-m', '--message'))
+#
+# Output redirection tokens (`> "$LOG" 2>&1`, the commit agent's capture form) are the only
+# non-option tokens allowed: they cannot change the index, cwd or repo.
+_RG_PREFIX_OPTS = ('--file=', '--message=', '--gpg-sign=', '--cleanup=', '--author=', '--date=')
+_RG_HATCH_VARS = ('CAST_HATCH_REASON', 'CAST_UNREVIEWED_OK')
+
+
+_RG_REDIRECTS = frozenset(('>', '>>', '2>', '2>>', '2>&1'))
+
+
+def _review_gate_literal(seg: str) -> bool:
+    """True only when every shlex token of `seg` is a pure literal, i.e. the shell would pass
+    exactly the argv shlex computes. shlex keeps an unquoted expansion as ONE token while the
+    shell expands and word-splits it (`-m a${Z:-x${IFS}-a}` runs `-m ax -a`), and a glob or
+    brace or tilde expands to other words. So, outside single quotes there must be no `$`,
+    backtick or backslash; outside any quotes no `* ? [ ] { } ~ ! # ^` (`^` negates a glob under
+    zsh extendedglob), no `=` at the start of a word (zsh expands `=cmd` to a path) and no
+    control character;
+    a shell operator char (`< > & ( ) | ;`) is allowed only as a whole redirect word from
+    `_RG_REDIRECTS` (never quoted: a quoted `'>'` is an argument, not a redirect); and every
+    quote must terminate. Single-quoted text is literal. Fails closed: False on anything else."""
+    quote = ''
+    word = ''
+    special = False
+    for ch in seg + ' ':   # the sentinel space flushes the last word (or fails an open quote)
+        if quote == "'":
+            word += ch
+            if ch == "'":
+                quote = ''
+            continue
+        if quote == '"':
+            word += ch
+            if ch in '$`\\':
+                return False
+            if ch == '"':
+                quote = ''
+            continue
+        if ch in ' \t':
+            if special and word not in _RG_REDIRECTS:
+                return False
+            if word.replace("'", '').replace('"', '') in _RG_REDIRECTS and word not in _RG_REDIRECTS:
+                return False   # a quoted lookalike would be read as a redirect by the parser
+            word, special = '', False
+            continue
+        if ch in '$`\\*?[]{}~!#^' or ord(ch) < 32 or (ch == '=' and not word):
+            return False
+        if ch in '<>&()|;':
+            special = True
+        if ch in '\'"':
+            quote = ch
+        word += ch
+    return quote == ''
+
+
+_REVIEW_GATE_PARSE_DEADLINE_S = 1.5   # no git spawn in the pre-gate parse past this, from guard entry
+
+
+def _review_gate_home() -> str:
+    """The fixed home (passwd entry, never the environment); the test seam wins when set."""
+    return _REVIEW_GATE_TEST_HOME or pwd.getpwuid(os.getuid()).pw_dir
+
+
+def _review_gate_git_dirs(dirs):
+    """Real git directories (git dir and common dir) of each of `dirs` -> (list, None), or
+    (None, why) when git cannot be asked reliably: 'budget' when 1.5 s since guard entry is
+    already spent (nothing is spawned), else 'redirect-gitdir'. A directory that is not a repo
+    (rc 128) contributes nothing. Each spawn is capped at min(0.5, time left to the deadline)."""
+    entry = _GUARD_ENTRY if _GUARD_ENTRY is not None else time.monotonic()
+    gs = _load_git_safe()
+    out = []
+    for d in dirs:
+        for args in (['rev-parse', '--absolute-git-dir'],
+                     ['rev-parse', '--path-format=absolute', '--git-common-dir']):
+            left = _REVIEW_GATE_PARSE_DEADLINE_S - (time.monotonic() - entry)
+            if left <= 0.05:
+                return None, 'budget'
+            r = gs.run(d, args, timeout=min(0.5, left))
+            if r.returncode == 128:
+                break
+            path = (r.stdout or '').strip()
+            if r.returncode != 0 or not path:
+                return None, 'redirect-gitdir'
+            out.append(os.path.realpath(path).lower())
+    return out, None
+
+
+def _review_gate_redirect_ok(path: str, base: str, gitdirs) -> bool:
+    """A redirect target is verifiable only when, resolved against the SHELL cwd `base` (that is
+    where the shell opens it), it is not inside a `.git` directory or either real git dir, and
+    is not a /dev node other than /dev/null (`/dev/stdin`, `/dev/fd/N`) or /proc. Truncating
+    `.git/index` or `.git/config` before git runs must not be a verifiable shape. `gitdirs`
+    also carries `<home>/.claude` (cast.db, hook state), which no redirect may touch."""
+    try:
+        if not path:
+            return False
+        full = os.path.realpath(os.path.join(base, path))
+        if full == '/dev/null':
+            return True
+        if full.startswith('/dev/') or full.startswith('/proc/'):
+            return False
+        low = full.lower()
+        if '.git' in low.split(os.sep):
+            return False
+        return not any(low == gd or low.startswith(gd + os.sep) for gd in gitdirs)
+    except Exception:
+        return False
+
+
+def _review_gate_shape(seg: str, shell_cwd: str):
+    """Allowlist parse of one commit segment -> (repo_dir, None) when the staged content the
+    guard can read now is exactly what the commit will record, else (None, short_why).
+    `shell_cwd` is the hook payload's cwd (where the shell runs); relative paths resolve
+    against it. Fails closed: any token not listed is unverifiable. Never raises."""
+    try:
+        if not shell_cwd:
+            return None, 'no-hook-cwd'
+        if any(m in seg for m in ('<(', '>(')):
+            return None, 'substitution'
+        if not _review_gate_literal(seg):
+            return None, 'non-literal'
+        word = re.search(r'(^|\s)git(\s|$)', seg)
+        if word is None or '"' in seg[:word.start()] or "'" in seg[:word.start()]:
+            return None, 'quoted-assignment'   # the prefix before `git` is unquoted VAR=value only
+        try:
+            toks = shlex.split(seg)
+        except ValueError:
+            return None, 'unparseable'
+        i = 0
+        while i < len(toks) and _ENV_ASSIGN.match(toks[i]):
+            name = toks[i].split('=', 1)[0]
+            if i == 0:
+                if toks[i] != 'CAST_COMMIT_AGENT=1':
+                    return None, 'assignment'
+            elif name not in _RG_HATCH_VARS:
+                return None, 'assignment'
+            i += 1
+        if i == 0 or i >= len(toks) or toks[i] != 'git':
+            return None, 'shape'
+        i += 1
+        target = shell_cwd
+        if i < len(toks) and toks[i] == '-C':
+            if i + 1 >= len(toks):
+                return None, 'git-C'
+            path = toks[i + 1]
+            if not path or path.startswith('-') or path in _RG_REDIRECTS:
+                return None, 'git-C'
+            target = os.path.join(shell_cwd, path)
+            i += 2
+        if i >= len(toks) or toks[i] != 'commit':
+            return None, 'global-option'
+        i += 1
+        gitdirs = None
+        while i < len(toks):
+            tok = toks[i]
+            if tok in _RG_FLAGS:
+                i += 1
+            elif tok in _RG_VALUE_OPTS:
+                if i + 1 >= len(toks) or toks[i + 1] in _RG_REDIRECTS:
+                    return None, 'option-value'
+                i += 2
+            elif tok.startswith(_RG_PREFIX_OPTS):
+                i += 1
+            elif tok == '2>&1':   # output capture (commit.md step 7); cannot change the index
+                i += 1
+            elif tok in ('>', '>>', '2>', '2>>') and i + 1 < len(toks):
+                if gitdirs is None:
+                    gitdirs, gd_why = _review_gate_git_dirs(sorted({shell_cwd, target}))
+                    if gitdirs is None:
+                        return None, gd_why
+                    gitdirs.append(os.path.realpath(
+                        os.path.join(_review_gate_home(), '.claude')).lower())
+                if toks[i + 1] in _RG_REDIRECTS or not _review_gate_redirect_ok(
+                        toks[i + 1], shell_cwd, gitdirs):
+                    return None, 'redirect-target'
+                i += 2
+            else:
+                return None, 'option:' + tok[:40]
+        return target, None
+    except Exception:
+        return None, 'internal'
+
+
+def _review_gate_module():
+    """The gate library, loaded by fixed path (regular file, not a symlink, ours). Cached."""
+    path = _REVIEW_GATE_MODULE_PATH or os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), 'cast-review-gate.py')
+    mod = _REVIEW_GATE_MODULES.get(path)
+    if mod is not None:
+        return mod
+    st = os.lstat(path)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+        raise ImportError('review gate module is not a user-owned regular file')
+    spec = importlib.util.spec_from_file_location('cast_review_gate', path)
+    if spec is None or spec.loader is None:
+        raise ImportError('review gate module unavailable')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _REVIEW_GATE_MODULES[path] = mod
+    return mod
+
+
+def _review_gate_block_message(ev: dict, mod) -> str:
+    first = next((r for r in ev['results'] if r[1] in ('blocked', 'unreviewed')), None)
+    if first is not None:
+        where = f'{mod._display(first[0])} ({first[1]}: {first[2]})'
+    else:
+        where = f"gate error: {ev.get('error')}"
+    return (
+        'BLOCKED by the content-bound review gate: staged content has no matching code-reviewer '
+        f'approval. First: {where}.\n'
+        'Remedies: run code-reviewer on the staged content; or use the documented commit shape '
+        '(CAST_COMMIT_AGENT=1 git [-C <repo-root>] commit -F <msg-file> as the FIRST command, '
+        'nothing chained before it); or for docs-only or release-stamp commits add '
+        'CAST_UNREVIEWED_OK=<reason> after CAST_COMMIT_AGENT=1.'
+    )
+
+
+def _review_gate_has_pipe(command: str) -> bool:
+    """True when `command` has a pipe (`|`, `|&`; not `||`) outside quotes anywhere. A pipeline
+    sibling runs concurrently with the commit and can change the index after the gate read it.
+    Conservative for pipes in comments and heredoc bodies, but NOT sound there: an apostrophe or
+    quote inside a `#` comment or a heredoc body is not a quote to bash yet opens one here, which
+    can mask a real pipe. That is why `_review_gate_check` rejects any multi-line command up
+    front (`multi-line`); on a single line comments and heredocs cannot hide a pipe from this
+    scan. Fails closed (True) on an unterminated quote."""
+    quote = ''
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if quote == "'":
+            if ch == "'":
+                quote = ''
+        elif quote == '"':
+            if ch == '\\':
+                i += 1
+            elif ch == '"':
+                quote = ''
+        elif ch == '\\':
+            i += 1
+        elif ch in '\'"':
+            quote = ch
+        elif ch == '|':
+            if command[i + 1:i + 2] == '|':
+                i += 1   # `||` is a sequential or-list
+            else:
+                return True
+        i += 1
+    return quote != ''
+
+
+def _review_gate_check(seg: str, *, first_segment: bool, in_pipeline: bool = False,
+                       multi_line: bool = False):
+    """Review gate for an allowed `CAST_COMMIT_AGENT=1 git commit` segment.
+
+    Returns (message, hatched): message is None (allow) or a block message, and only enforce
+    mode ever returns one; hatched is True when CAST_UNREVIEWED_OK turned an unreviewed path
+    into an allow, so the caller records it through the budgeted `record_hatch_use`.
+    Never raises. Called only for segments the commit allow path already accepted.
+
+    BOUNDARY (documented, not closed): the gate reads the index BEFORE git runs. A hostile
+    repo's own `.git/hooks/pre-commit` (or any hook/config the repo controls) can still change
+    the index afterwards. That is same-user repo control and outside the gate's boundary.
+
+    Time: measured from guard entry (`_GUARD_ENTRY`), capped by `_REVIEW_GATE_BUDGET_S` from
+    here and by `_REVIEW_GATE_HOOK_BUDGET_S` from entry, so WARN mode stays far from the 5 s
+    onFailure=block hook timeout."""
+    t0 = time.monotonic()
+    entry = _GUARD_ENTRY if _GUARD_ENTRY is not None else t0
+    enforce = _REVIEW_GATE_MODE == 'enforce'
+    mod = None
+
+    def remaining() -> float:
+        now = time.monotonic()
+        return min(_REVIEW_GATE_BUDGET_S - (now - t0), _REVIEW_GATE_HOOK_BUDGET_S - (now - entry))
+
+    try:
+        home = _review_gate_home()
+        db_path = os.path.join(home, '.claude', 'cast.db')
+        shell_cwd = _HOOK_CWD
+        log_row = True
+        if not shell_cwd:
+            target, why, log_row = None, 'no-hook-cwd', False   # no repo to name in a row
+        elif multi_line:   # see `_review_gate_has_pipe`: quotes in comments/heredocs can mask a pipe
+            target, why = None, 'multi-line'
+        elif in_pipeline:
+            target, why = None, 'pipeline'
+        elif first_segment:
+            target, why = _review_gate_shape(seg, shell_cwd)
+        else:
+            target, why = None, 'not-first-segment'
+        ev = None
+        if target is None:
+            ev = _review_gate_synthetic('unverifiable-command:' + why)
+            if shell_cwd:
+                ev['root'] = shell_cwd
+        else:
+            mod = _review_gate_module()
+            left = remaining()
+            if left < 0.5:   # too little hook budget left to start the gate
+                ev = _review_gate_synthetic('budget')
+                ev['error'] = 'budget'
+                ev['root'] = target
+            else:
+                ev = mod.evaluate(
+                    target, db_path=db_path, home=home,
+                    hatch=_hatch_value(seg, 'CAST_UNREVIEWED_OK'),
+                    budget_s=max(0.1, left - 0.5), audit_hatch=False)
+        err = ev.get('error')
+        if err and not ev.get('results'):
+            ev = dict(ev, results=[('*', 'error', err)])   # the row names why
+        if mod is None and log_row:
+            try:
+                mod = _review_gate_module()
+            except Exception:
+                mod = None
+        left = remaining()
+        if mod is not None and log_row and (ev.get('staged') or err) and left > 0.05:
+            try:
+                c = ev['counts']
+                mod.write_row(db_path, {
+                    'session_id': _HOOK_CTX.get('session_id') or None,
+                    'repo_root': ev['root'], 'would_block': ev['would_block'],
+                    'n_staged': len(ev['results']) if ev.get('staged') else 0,
+                    'n_approved': c['approved'],
+                    'n_unreviewed': c['unreviewed'], 'n_blocked': c['blocked'],
+                    'n_derived': c['derived'], 'n_hatched': c['hatched'],
+                    'reasons': mod.build_reasons(ev['results']),
+                }, min(_REVIEW_GATE_ROW_TIMEOUT_S, left), mode=_REVIEW_GATE_MODE, source='guard')
+            except Exception:
+                pass
+        if err == 'not-a-repo':
+            return None, False   # git itself will fail
+        if enforce and ev.get('would_block'):
+            return (_review_gate_block_message(ev, mod) if mod is not None else
+                    'BLOCKED by the content-bound review gate: the gate could not be evaluated.'), False
+        return None, bool(ev.get('counts', {}).get('hatched'))
+    except Exception:
+        if enforce:
+            return ('BLOCKED by the content-bound review gate: the gate could not be evaluated '
+                    '(fail closed). Use the documented commit shape or CAST_UNREVIEWED_OK=<reason>.'), False
+        return None, False
+
+
+def _review_gate_synthetic(reason: str) -> dict:
+    """A would-block evaluation for a commit the gate could not (or must not) evaluate."""
+    return {'results': [('*', 'unreviewed', reason)],
+            'counts': {'approved': 0, 'unreviewed': 1, 'blocked': 0, 'derived': 0, 'hatched': 0},
+            'would_block': 1, 'db_ok': False, 'error': None, 'root': os.getcwd(), 'staged': True}
 
 
 def _git_evaluate_impl(command: str, suppressed_counter):
@@ -5714,12 +6101,15 @@ def _git_evaluate_impl(command: str, suppressed_counter):
     tracker = _DirTracker()   # literal cd/pushd targets so far -- see `_DirTracker`
     scan_work = 0  # running `_scan_work` total — see `_MAX_GIT_SCAN_WORK`
     tokenized_bytes = 0  # running total handed to shlex — see `_MAX_GIT_TOKENIZE_BYTES`
+    segments_seen = 0  # non-empty segments before this one -- the review gate needs the commit FIRST
     for seg in _executable_segments(command):
         if isinstance(seg, _Refusal):
             return 2, seg.msg   # nested code over its step / count cap or `_MAX_EXEC_DEPTH`, or unparseable
         seg = seg.strip()
         if not seg:
             continue
+        first_segment = segments_seen == 0
+        segments_seen += 1
         tracker.observe(seg)
         # 2026-08-17 shlex tokenization pass: `norm` is a quote-stripped,
         # absolute-path-normalized rendering of `seg` (None if `seg` isn't a
@@ -5840,6 +6230,13 @@ def _git_evaluate_impl(command: str, suppressed_counter):
         if hit(_COMMIT_BLOCK):
             if hit(_COMMIT_ALLOW):
                 record_hatch_use('CAST_COMMIT_AGENT', 'commit')
+                gate_msg, gate_hatched = _review_gate_check(
+                    seg, first_segment=first_segment, in_pipeline=_review_gate_has_pipe(command),
+                    multi_line='\n' in command or '\r' in command)
+                if gate_msg:
+                    return 2, gate_msg
+                if gate_hatched:
+                    record_hatch_use('CAST_UNREVIEWED_OK', 'commit')
             else:
                 return 2, _COMMIT_MSG
         if hit(_PUSH_ALLOW):

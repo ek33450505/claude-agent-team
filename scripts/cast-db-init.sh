@@ -921,6 +921,7 @@ CREATE TABLE IF NOT EXISTS review_snapshot_files (
     snapshot_id INTEGER NOT NULL REFERENCES review_snapshots(id) ON DELETE CASCADE,
     path TEXT NOT NULL,
     blob TEXT NOT NULL,
+    mode TEXT,
     PRIMARY KEY (snapshot_id, path)
 );
 CREATE INDEX IF NOT EXISTS idx_review_snapshot_files_path_blob ON review_snapshot_files(path, blob);
@@ -946,6 +947,7 @@ CREATE TABLE IF NOT EXISTS review_gate_decisions (
     n_derived INTEGER NOT NULL DEFAULT 0,
     n_hatched INTEGER NOT NULL DEFAULT 0,
     reasons TEXT,
+    source TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_review_gate_decisions_repo ON review_gate_decisions(repo_root);
@@ -1213,6 +1215,13 @@ sqlite3 "$DB_PATH" "ALTER TABLE provenance_chain ADD COLUMN receipt_json TEXT;" 
 # files for spawnDepth and on every depth>=2 agent for parentAgentId.
 sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN spawn_depth INTEGER;" 2>/dev/null || true
 sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN parent_agent_id TEXT;" 2>/dev/null || true
+
+# review_snapshot_files.mode / review_gate_decisions.source (v10.6.2, migration 039): the git
+# file mode recorded at snapshot time (F2 mode binding) and who wrote a gate decision row
+# ('guard' | 'cli'). Self-healing for DBs created before these columns; duplicate-column and
+# missing-table errors are both benign.
+sqlite3 "$DB_PATH" "ALTER TABLE review_snapshot_files ADD COLUMN mode TEXT;" 2>/dev/null || true
+sqlite3 "$DB_PATH" "ALTER TABLE review_gate_decisions ADD COLUMN source TEXT;" 2>/dev/null || true
 
 # commit_provenance: D5 self-commit enforcement substrate — records the SHA of every
 # commit made by the `commit` agent so the pre-push reconciler can flag unauthorized

@@ -26,7 +26,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Set, Tuple
 
 # ── log_hook_failure loader (sibling cast_db.py) ─────────────────────────────
 _HOOK_DIR = os.environ.get("CAST_HOOK_DIR", os.path.expanduser("~/.claude/scripts"))
@@ -1835,12 +1835,161 @@ def _write_review_unrecorded_marker(repo_root: str, ctx, reviewer: str) -> bool:
         return False
 
 
+_TOUCHED_TRANSCRIPT_MAX = 16 * 1024 * 1024
+_TOUCH_TOOLS = {"Read": "file_path", "Grep": "path", "Glob": "path"}
+
+
+_TOUCHED_MAX_PATHS = 2000
+_EXTRA_ROOTS_MAX = 16
+
+
+def _reviewer_touched_paths(ctx, cwd: str = "", deadline: Optional[float] = None) -> Optional[Set[str]]:
+    """Realpaths the reviewer opened via Read/Grep/Glob, from its TRUSTED transcript.
+
+    None = unknown (no/unreadable/unparsable/over-16-MiB transcript). The payload's own
+    agent_transcript_path is never used. Relative paths resolve against cwd. More than
+    _TOUCHED_MAX_PATHS distinct paths, or a spent `deadline` (time.monotonic value) -> None.
+    Never raises.
+    """
+    try:
+        path = _find_subagent_artifact(ctx, ".jsonl")
+        if not path:
+            return None
+        if not cwd:
+            cwd = os.path.expanduser((ctx.data.get("cwd") or "").strip()) if isinstance(ctx.data, dict) else ""
+        cwd = cwd or os.getcwd()
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > _TOUCHED_TRANSCRIPT_MAX:
+                return None
+            chunks: List[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(fd, 1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _TOUCHED_TRANSCRIPT_MAX:
+                    return None
+                chunks.append(chunk)
+        finally:
+            os.close(fd)
+        raw_paths: Set[str] = set()
+        for raw in b"".join(chunks).split(b"\n"):
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
+            raw = raw.strip()
+            if not raw:
+                continue
+            entry = json.loads(raw.decode("utf-8"))
+            if not isinstance(entry, dict) or entry.get("type") != "assistant":
+                continue
+            message = entry.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            for blk in content:
+                if not (isinstance(blk, dict) and blk.get("type") == "tool_use"):
+                    continue
+                # A Grep/Glob without `path` (a cwd search) is NOT counted as a touch, and relative
+                # paths resolve against the payload cwd; both fail closed for APPROVE.
+                key = _TOUCH_TOOLS.get(blk.get("name"))
+                inp = blk.get("input")
+                val = inp.get(key) if key and isinstance(inp, dict) else None
+                if isinstance(val, str) and val and "\0" not in val:
+                    raw_paths.add(os.path.join(cwd, os.path.expanduser(val)))
+                    if len(raw_paths) > _TOUCHED_MAX_PATHS:
+                        return None
+        touched: Set[str] = set()
+        for rp in raw_paths:  # realpath only the DISTINCT strings
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
+            touched.add(os.path.realpath(rp))
+        return touched
+    except Exception:
+        return None
+
+
+def _map_touched_roots(paths: Set[str], roots: List[str]) -> Set[str]:
+    """Longest candidate root containing each path (component boundary); unmatched dropped."""
+    out: Set[str] = set()
+    for pth in paths:
+        best = ""
+        for r in roots:
+            if (pth == r or pth.startswith(r.rstrip(os.sep) + os.sep)) and len(r) > len(best):
+                best = r
+        if best:
+            out.add(best)
+    return out
+
+
+def _extra_touched_roots(crs, repo_dir: str, touched_paths: Set[str], candidates: List[str],
+                         left) -> Tuple[List[str], Optional[str]]:
+    """(roots, incomplete_reason): toplevels of UNMAPPED touched paths in the SAME repository.
+
+    These are worktrees the start snapshot did not know (created mid-review). Directories are
+    deduped before any git call, capped at _EXTRA_ROOTS_MAX, and bounded by the shared budget
+    (`left()` = seconds remaining). Paths outside any repo / in another repository are ignored.
+    incomplete_reason is None when discovery covered every unmapped directory, else why not:
+    the dir cap was hit with directories unchecked, the repo identity was unavailable, or the
+    budget ran out. The caller degrades the default repo's BLOCK in that case.
+    """
+    try:
+        dirs: List[str] = []
+        for pth in sorted(touched_paths):
+            if any(pth == r or pth.startswith(r.rstrip(os.sep) + os.sep) for r in candidates):
+                continue
+            d = pth if os.path.isdir(pth) else os.path.dirname(pth)
+            if d not in dirs:
+                dirs.append(d)
+        if not dirs:
+            return [], None
+        reason = None
+        if len(dirs) > _EXTRA_ROOTS_MAX:
+            dirs = dirs[:_EXTRA_ROOTS_MAX]
+            reason = f"more than {_EXTRA_ROOTS_MAX} unmapped directories"
+        ident = crs.repo_identity(repo_dir, left())
+        if ident is None:
+            return [], "repo identity unavailable"
+        common = ident[1]
+        out: List[str] = []
+        for d in dirs:
+            rem = left()
+            if rem <= 0:
+                return out, "budget spent"
+            got = crs.repo_identity(d, rem)
+            if got and got[1] == common and got[0] not in candidates and got[0] not in out:
+                out.append(got[0])
+        return out, reason
+    except Exception:
+        return [], "exception"
+
+
 def stage8b_review_snapshot(ctx: Ctx) -> None:
     """Persist a content-bound review record for code-reviewer / security runs. Never raises.
 
     Identity comes from the VERIFIED roster type (the meta.json sidecar), never from
     ctx.agent_name: a dispatcher-chosen `name` overwrites the payload agent_type, so the
     name is spoofable. Unverified roster -> nothing recorded (unreviewed at the gate).
+
+    Worktree coverage: the SubagentStart snapshot covers the cwd's repo AND every linked
+    worktree. Here the roots bound are the "touched" ones -- worktrees the reviewer opened
+    files in (Read/Grep/Glob inputs in its trusted transcript) -- so a review of worktree X
+    never approves worktree Y. APPROVE binds the touched roots, else the cwd's root only.
+    BLOCKED binds: every candidate root when the transcript is unknown or holds no structured
+    reads (a Bash-only reviewer); otherwise the touched roots + the cwd's root + any touched
+    worktree of the SAME repo the start snapshot did not know (stop-only rows).
+
+    Boundary: BLOCKs are guaranteed for the default root and the start-known worktrees. Same-repo
+    worktrees created mid-review are bound best-effort (EXTRA roots); when that discovery is
+    incomplete (dir cap, identity unavailable, budget spent) the default repo also gets a
+    degraded scope='repo' BLOCK, which a later file-scoped review clears.
+
+    Per root: APPROVE records the files stable across start and stop. BLOCKED records the
+    start|stop union (one snapshot -> its files); BOTH snapshots present but a clean tree
+    records nothing; otherwise with no files -> scope='repo' degraded row. Each root gets an
+    equal share of the remaining budget (floor 0.25 s) so none starves the others.
 
     Failure modes: a failed APPROVE record writes NO marker -- absence of an APPROVE row is
     itself fail-closed at the gate. A BLOCKED verdict that cannot be recorded falls back to a
@@ -1866,49 +2015,103 @@ def stage8b_review_snapshot(ctx: Ctx) -> None:
         # take_snapshot returns None -- so a BLOCKED verdict still lands as a degraded
         # scope='repo' row (and APPROVE stays unrecorded, fail-closed).
         budget_end = time.monotonic() + min(_REVIEW_SNAPSHOT_BUDGET_S, _remaining())
-        repo_root = crs.resolve_repo_root(repo_dir, timeout=budget_end - time.monotonic())
+
+        def _left() -> float:
+            return max(0.0, budget_end - time.monotonic())
+
+        default_root = crs.resolve_repo_root(repo_dir, timeout=_left())
         start = crs.load_start(crs.default_state_dir(), ctx.agent_id,
                                session_id=ctx.session_id or None, reviewer=reviewer)
-        stop = crs.take_snapshot(repo_dir, deadline_s=max(0.0, budget_end - time.monotonic()))
+        start_snaps = start["snaps"] if isinstance(start, dict) else {}
+        candidates: List[str] = [default_root] if default_root else []
+        for r in list(start_snaps) + ((crs.list_worktrees(repo_dir, _left()) or []) if _left() > 0 else []):
+            if r not in candidates:
+                candidates.append(r)
+        touched_paths = _reviewer_touched_paths(ctx, repo_dir, deadline=budget_end)
+        mapped = _map_touched_roots(touched_paths, candidates) if touched_paths else set()
+        extra_incomplete = None
+        if decision == "APPROVE":
+            roots = [r for r in candidates if r in mapped] or ([default_root] if default_root else [])
+        elif not touched_paths:  # transcript unknown OR no structured reads (Bash-only reviewer)
+            roots = list(candidates)
+        else:
+            # Mapped worktrees, the default root, and any touched path in the SAME repository
+            # that was not a start candidate (a worktree created mid-review): stop-only rows.
+            extras, extra_incomplete = _extra_touched_roots(crs, repo_dir, touched_paths, candidates, _left)
+            wanted = ([default_root] if default_root else []) + sorted(mapped) + extras
+            roots = list(dict.fromkeys(wanted))
         db = ctx.db_path
         ended = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         started = start.get("started_at") if isinstance(start, dict) else None
         common = dict(session_id=ctx.session_id or None, agent_id=ctx.agent_id, reviewer=reviewer,
                       started_at=started, ended_at=ended)
-        if decision == "APPROVE":
-            files = crs.stable_files(start, stop) if (start and stop) else {}
-            if files and crs.record(db, repo_root=stop["repo_root"], decision="APPROVE",
-                                    files=files, **common):
-                return
-            why = ("no start snapshot" if not start else "no stop snapshot" if not stop
-                   else "nothing stable" if not files else "record failed")
-            _log_error(f"review-snapshot: APPROVE not recorded for {reviewer} {ctx.agent_id}: {why}")
+        if not roots:
+            if decision != "APPROVE":
+                ident = default_root or os.path.realpath(repo_dir)
+                if ident:
+                    _write_review_unrecorded_marker(ident, ctx, reviewer)
+                _log_fail("review_snapshot", -1, f"BLOCK has no root to bind for {reviewer} {ctx.agent_id}",
+                          ctx.session_id)
+            else:
+                _log_error(f"review-snapshot: APPROVE not recorded for {reviewer} {ctx.agent_id}: no repo root")
             return
-        # BLOCKED: block everything the reviewer could have seen (start union stop).
-        # Both snapshots -> union; exactly one -> that snapshot's files; neither -> degraded.
-        ok = False
-        snaps = [x for x in (start, stop) if x]
-        if len(snaps) == 2 and start.get("repo_root") != stop.get("repo_root"):
-            snaps = []  # inconsistent roots: cannot scope safely -> degraded below
-        union = {}
-        for x in snaps:
-            union.update(x["files"])  # stop (last) wins in the primary row
-        if snaps and union:  # an empty union is a zero-path row: degrade instead
-            root = snaps[-1]["repo_root"]
-            ok = crs.record(db, repo_root=root, decision="BLOCKED", files=union, **common)
-            if ok and len(snaps) == 2:
-                sf, tf = start["files"], stop["files"]
-                older = {p: v for p, v in sf.items() if p in tf and tf[p] != v}
-                if older:  # (snapshot_id, path) is a PK: superseded start values get a 2nd row
-                    ok = crs.record(db, repo_root=root, decision="BLOCKED", files=older, **common)
-        if ok:
-            return
-        if repo_root and crs.record_degraded_block(db, repo_root=repo_root, **common):
-            _log_error(f"review-snapshot: degraded repo-scope BLOCK for {reviewer} {ctx.agent_id}")
-            return
-        if repo_root:
-            _write_review_unrecorded_marker(repo_root, ctx, reviewer)
-        _log_fail("review_snapshot", -1, f"BLOCK unrecorded for {reviewer} {ctx.agent_id}", ctx.session_id)
+        if extra_incomplete and default_root:
+            _log_error(f"review-snapshot: EXTRA-root discovery incomplete for {reviewer} "
+                       f"{ctx.agent_id} ({extra_incomplete}); degrading")
+            if not crs.record_degraded_block(db, repo_root=default_root, **common):
+                _write_review_unrecorded_marker(default_root, ctx, reviewer)
+        for i, root in enumerate(roots):
+            # Each root gets an equal share of what is left (floor 0.25 s, never above it) so a
+            # slow first root cannot starve the rest.
+            rem = _left()
+            share = min(rem, max(0.25, rem / (len(roots) - i)))
+            start_r = start_snaps.get(root)
+            stop_r = crs.take_snapshot(root, deadline_s=share)
+            if decision == "APPROVE":
+                files = crs.stable_files(start_r, stop_r) if (start_r and stop_r) else {}
+                if files and crs.record(db, repo_root=root, decision="APPROVE", files=files,
+                                        modes=crs.modes_for(files, stop_r), **common):
+                    continue
+                why = ("no start snapshot" if not start_r else "no stop snapshot" if not stop_r
+                       else "nothing stable" if not files else "record failed")
+                if share <= 0 and not stop_r:
+                    _log_error(f"review-snapshot: APPROVE root starved by budget for {root} "
+                               f"({reviewer} {ctx.agent_id})")
+                _log_error(f"review-snapshot: APPROVE not recorded for {reviewer} {ctx.agent_id}: {why}")
+                continue
+            # BLOCKED: block everything the reviewer could have seen (start union stop).
+            if not stop_r:
+                _log_error(f"review-snapshot: no stop snapshot for {root} ({reviewer} {ctx.agent_id})")
+            snaps = [x for x in (start_r, stop_r) if x]
+            if any(x.get("repo_root") != root for x in snaps):
+                snaps = []  # inconsistent roots: cannot scope safely -> degraded below
+            union: dict = {}
+            union_modes: dict = {}
+            for x in snaps:
+                union.update(x["files"])  # stop (last) wins in the primary row
+                # the mode comes from the snapshot that supplied the blob (informational for BLOCK)
+                union_modes.update(crs.modes_for(x["files"], x))
+            if len(snaps) == 2 and not union:
+                # Both snapshots exist and the tree is clean: there is nothing to bind.
+                _log_error(f"review-snapshot: BLOCK on clean tree, nothing to bind for {reviewer} {ctx.agent_id}")
+                continue
+            ok = False
+            if union:
+                ok = crs.record(db, repo_root=root, decision="BLOCKED", files=union,
+                                modes=union_modes, **common)
+                if ok and len(snaps) == 2:
+                    sf, tf = start_r["files"], stop_r["files"]
+                    older = {p: v for p, v in sf.items() if p in tf and tf[p] != v}
+                    if older:  # (snapshot_id, path) is a PK: superseded start values get a 2nd row
+                        ok = crs.record(db, repo_root=root, decision="BLOCKED", files=older,
+                                        modes=crs.modes_for(older, start_r), **common)
+            if ok:
+                continue
+            if crs.record_degraded_block(db, repo_root=root, **common):
+                _log_error(f"review-snapshot: degraded repo-scope BLOCK for {reviewer} {ctx.agent_id}")
+                continue
+            _write_review_unrecorded_marker(root, ctx, reviewer)
+            _log_fail("review_snapshot", -1, f"BLOCK unrecorded for {reviewer} {ctx.agent_id}", ctx.session_id)
     except Exception as exc:
         _log_fail("review_snapshot", -1, f"{type(exc).__name__}: {exc}", ctx.session_id)
 

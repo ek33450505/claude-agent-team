@@ -80,15 +80,18 @@ class GateCase(unittest.TestCase):
         return self.git("hash-object", "--no-filters", "--", rel).strip()
 
     def seed(self, decision, files, reviewer="code-reviewer", scope="files", ended_at=T_MID,
-             repo_root=None):
+             repo_root=None, started_at=T_OLD, mode="100644"):
+        """mode is the git mode stored on every file row (default a regular file; DELETED rows
+        always store NULL, like the recorder). Pass mode=None to seed a NULL-mode row."""
         conn = sqlite3.connect(self.db)
         try:
             cur = conn.execute(
                 "INSERT INTO review_snapshots (session_id, agent_id, reviewer, repo_root, decision, scope, started_at, ended_at) VALUES ('s','a',?,?,?,?,?,?)",
-                (reviewer, repo_root or self.repo, decision, scope, T_OLD, ended_at))
+                (reviewer, repo_root or self.repo, decision, scope, started_at, ended_at))
             for path, blob in files.items():
-                conn.execute("INSERT INTO review_snapshot_files (snapshot_id, path, blob) VALUES (?,?,?)",
-                             (cur.lastrowid, crs.path_key(path), blob))
+                m = None if blob == crs.DELETED else mode
+                conn.execute("INSERT INTO review_snapshot_files (snapshot_id, path, blob, mode) VALUES (?,?,?,?)",
+                             (cur.lastrowid, crs.path_key(path), blob, m))
             conn.commit()
         finally:
             conn.close()
@@ -192,7 +195,7 @@ class TestClassification(GateCase):
         os.symlink("base.txt", os.path.join(self.repo, "lnk"))
         self.stage("lnk")
         fmt = crs._object_format(self.repo)
-        self.seed("APPROVE", {"lnk": crs._symlink_blob(os.path.join(self.repo, "lnk"), fmt)})
+        self.seed("APPROVE", {"lnk": crs._symlink_blob(os.path.join(self.repo, "lnk"), fmt)}, mode="120000")
         self.assertCounts(self.gate(), approved=1, unreviewed=0)
 
     def test_non_utf8_filename(self):
@@ -319,14 +322,43 @@ class TestHatchAndDerived(GateCase):
             self.stage(rel)
             self.seed("APPROVE", {rel: self.blob(rel)})
 
+    def _evaluate(self, mod=None, hatch="", db=None):
+        mod = mod or self._mod()
+        return mod.evaluate(self.repo, db_path=db or self.db, home=self.home, hatch=hatch, budget_s=20.0)
+
+    def _mod(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("gate_mod", GATE)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _root_sha(self):
+        return self.git("rev-list", "--max-parents=0", "HEAD").split()[0]
+
     def test_derived_only_in_cast_shaped_repo(self):
         self._cast_shape()
         self.write("plugin/gen.txt", "g\n")
         self.write("cast-stats.json", "{}\n")
         self.stage("plugin/gen.txt", "cast-stats.json")
-        line = self.gate()
-        self.assertTrue(line.startswith("review-gate OK:"), line)
-        self.assertCounts(line, derived=2, approved=2, unreviewed=0)
+        mod = self._mod()
+        mod.CAST_ROOT_COMMIT = self._root_sha()
+        ev = self._evaluate(mod)
+        self.assertEqual((ev["counts"]["derived"], ev["counts"]["approved"], ev["counts"]["unreviewed"]), (2, 2, 0))
+
+    def test_cast_files_but_other_root_commit_not_derived(self):
+        self._cast_shape()
+        self.write("plugin/x", "g\n")
+        self.stage("plugin/x")
+        ev = self._evaluate()  # real CAST_ROOT_COMMIT != this repo's root
+        self.assertEqual((ev["counts"]["derived"], ev["counts"]["unreviewed"]), (0, 1))
+
+    def test_is_cast_repo_true_with_patched_root_commit(self):
+        self._cast_shape()
+        mod = self._mod()
+        self.assertFalse(mod.is_cast_repo(self.repo, __import__("time").monotonic() + 10))
+        mod.CAST_ROOT_COMMIT = self._root_sha()
+        self.assertTrue(mod.is_cast_repo(self.repo, __import__("time").monotonic() + 10))
 
     def test_derived_not_exempt_outside_cast_repo(self):
         self.write("plugin/gen.txt", "g\n")
@@ -485,6 +517,13 @@ class TestGitlinkBounds(GateCase):
 
 
 class TestPrecedence(GateCase):
+    def _mod(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("gate_mod", GATE)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
     def _cast_repo_with_plugin(self):
         self.write("agents/core/commit.md", "x\n")
         self.write("scripts/cast_review_snapshot.py", "x = 1\n")
@@ -507,8 +546,12 @@ class TestPrecedence(GateCase):
 
     def test_derived_with_db_missing_and_no_block(self):
         self._cast_repo_with_plugin()
-        line = self.gate(db=os.path.join(self.tmp, "nope.db"))
-        self.assertCounts(line, derived=1, blocked=0)
+        mod = self._mod()
+        mod.CAST_ROOT_COMMIT = self.git("rev-list", "--max-parents=0", "HEAD").split()[0]
+        ev = mod.evaluate(self.repo, db_path=os.path.join(self.tmp, "nope.db"), home=self.home,
+                          hatch="", budget_s=20.0)
+        self.assertEqual((ev["counts"]["derived"], ev["counts"]["blocked"]), (1, 0))
+        self.assertFalse(ev["db_ok"])
 
 
 class TestIndexVsWorktree(GateCase):
@@ -574,6 +617,231 @@ class TestDerivedBlocks(GateCase):
         self.assertCounts(self.gate(), blocked=3, derived=0)
 
 
+class TestClearingAndMode(GateCase):
+    def setUp(self):
+        super().setUp()
+        self.write("a.txt", "one\n")
+        self.stage("a.txt")
+        self.b = self.blob("a.txt")
+
+    def test_block_then_later_same_type_approve_is_approved(self):
+        self.seed("BLOCKED", {"a.txt": self.b}, started_at=T_OLD, ended_at=T_MID)
+        self.seed("APPROVE", {"a.txt": self.b}, started_at=T_NEW, ended_at=T_NEW)
+        self.assertCounts(self.gate(), approved=1, blocked=0)
+
+    def test_approve_overlapping_block_stays_blocked(self):
+        self.seed("BLOCKED", {"a.txt": self.b}, started_at=T_OLD, ended_at=T_NEW)
+        self.seed("APPROVE", {"a.txt": self.b}, started_at=T_MID, ended_at=T_NEW)
+        self.assertCounts(self.gate(), approved=0, blocked=1)
+
+    def test_security_block_not_cleared_by_code_reviewer_approve(self):
+        self.seed("BLOCKED", {"a.txt": self.b}, reviewer="security", ended_at=T_MID)
+        self.seed("APPROVE", {"a.txt": self.b}, started_at=T_NEW, ended_at=T_NEW)
+        self.assertCounts(self.gate(), approved=0, blocked=1)
+
+    def test_code_reviewer_block_not_cleared_by_security_approve(self):
+        self.seed("BLOCKED", {"a.txt": self.b}, ended_at=T_MID)
+        self.seed("APPROVE", {"a.txt": self.b}, reviewer="security", started_at=T_NEW, ended_at=T_NEW)
+        self.seed("APPROVE", {"a.txt": self.b}, started_at=T_OLD, ended_at=T_OLD)
+        self.assertCounts(self.gate(), blocked=1)
+
+    def test_unparseable_timestamps_stay_blocked(self):
+        self.seed("BLOCKED", {"a.txt": self.b}, ended_at="garbage")
+        self.seed("APPROVE", {"a.txt": self.b}, started_at=T_NEW, ended_at=T_NEW)
+        self.assertCounts(self.gate(), blocked=1)
+        conn = sqlite3.connect(self.db)
+        conn.execute("DELETE FROM review_snapshots")
+        conn.commit()
+        conn.close()
+        self.seed("BLOCKED", {"a.txt": self.b}, ended_at=T_MID)
+        self.seed("APPROVE", {"a.txt": self.b}, started_at="nope", ended_at=T_NEW)
+        self.assertCounts(self.gate(), blocked=1)
+
+    def test_two_blocks_same_blob_one_uncleared_stays_blocked(self):
+        self.seed("BLOCKED", {"a.txt": self.b}, ended_at=T_MID)
+        self.seed("BLOCKED", {"a.txt": self.b}, reviewer="security", ended_at=T_MID)
+        self.seed("APPROVE", {"a.txt": self.b}, started_at=T_NEW, ended_at=T_NEW)
+        self.assertCounts(self.gate(), approved=0, blocked=1)
+
+    def test_approve_started_after_its_own_end_cannot_clear(self):
+        self.seed("BLOCKED", {"a.txt": self.b}, ended_at=T_MID)
+        self.seed("APPROVE", {"a.txt": self.b}, started_at=T_NEW, ended_at=T_OLD)
+        self.assertCounts(self.gate(), blocked=1)
+
+    def test_far_future_approve_cannot_clear(self):
+        self.seed("BLOCKED", {"a.txt": self.b}, ended_at=T_MID)
+        self.seed("APPROVE", {"a.txt": self.b}, started_at="2099-01-01T00:00:00Z", ended_at="2099-01-01T00:01:00Z")
+        self.assertCounts(self.gate(), blocked=1)
+
+    def test_null_mode_approve_non_deletion_is_unreviewed_explicit(self):
+        self.seed("APPROVE", {"a.txt": self.b}, mode=None)
+        line = self.gate()
+        self.assertCounts(line, approved=0, unreviewed=1)
+        self.assertIn("no-approval", line)
+
+    def test_mode_mismatch_is_unreviewed(self):
+        os.chmod(os.path.join(self.repo, "a.txt"), 0o755)
+        self.stage("a.txt")
+        self.seed("APPROVE", {"a.txt": self.b}, mode="100644")
+        self.assertCounts(self.gate(), approved=0, unreviewed=1)
+
+    def test_mode_match_exec_is_approved(self):
+        os.chmod(os.path.join(self.repo, "a.txt"), 0o755)
+        self.stage("a.txt")
+        self.seed("APPROVE", {"a.txt": self.b}, mode="100755")
+        self.assertCounts(self.gate(), approved=1)
+
+    def test_staged_deletion_deleted_approve_null_mode(self):
+        self.git("rm", "-q", "base.txt")
+        self.seed("APPROVE", {"base.txt": "DELETED"})
+        self.assertCounts(self.gate(), approved=1)
+
+
+class TestEvaluateAndSource(GateCase):
+    def _mod(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("gate_mod", GATE)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _staged_a(self):
+        self.write("a.txt", "one\n")
+        self.stage("a.txt")
+
+    def _assert_fail_closed(self, ev):
+        self.assertIsNotNone(ev["error"])
+        self.assertEqual(ev["would_block"], 1)
+
+    def test_diff_failed_is_would_block(self):
+        self._staged_a()
+        with open(os.path.join(self.repo, ".git", "index"), "wb") as fh:
+            fh.write(b"corrupt")
+        ev = self._mod().evaluate(self.repo, db_path=self.db, home=self.home, hatch="", budget_s=10.0)
+        self.assertEqual(ev["error"], "diff-failed")
+        self._assert_fail_closed(ev)
+
+    def test_exception_in_classify_is_would_block(self):
+        self._staged_a()
+        mod = self._mod()
+        def boom(*a, **k):
+            raise RuntimeError("x")
+        mod.classify = boom
+        ev = mod.evaluate(self.repo, db_path=self.db, home=self.home, hatch="", budget_s=10.0)
+        self.assertEqual(ev["error"], "exception:RuntimeError")
+        self._assert_fail_closed(ev)
+
+    def test_raising_record_hatch_keeps_partial_results_and_blocks(self):
+        self._staged_a()
+        mod = self._mod()
+        def boom(_v):
+            raise RuntimeError("x")
+        mod.record_hatch = boom
+        ev = mod.evaluate(self.repo, db_path=self.db, home=self.home, hatch="why", budget_s=10.0)
+        self.assertEqual(ev["error"], "exception:RuntimeError")
+        self._assert_fail_closed(ev)
+        self.assertEqual([(p, c) for p, c, _ in ev["results"]], [("a.txt", "unreviewed")])
+
+    def test_audit_hatch_false_skips_record_hatch(self):
+        self._staged_a()
+        mod = self._mod()
+        def boom(_v):
+            raise RuntimeError("must not be called")
+        mod.record_hatch = boom
+        ev = mod.evaluate(self.repo, db_path=self.db, home=self.home, hatch="why", budget_s=10.0,
+                          audit_hatch=False)
+        self.assertIsNone(ev["error"])
+        self.assertEqual([(p, c) for p, c, _ in ev["results"]], [("a.txt", "hatched")])
+        self.assertEqual((ev["counts"]["hatched"], ev["would_block"]), (1, 0))
+
+    def test_spent_budget_is_would_block(self):
+        self._staged_a()
+        ev = self._mod().evaluate(self.repo, db_path=self.db, home=self.home, hatch="", budget_s=0.0)
+        self.assertEqual(ev["error"], "budget")
+        self._assert_fail_closed(ev)
+
+    def _cli_zero_budget(self, **env):
+        code = ("import importlib.util,sys;"
+                "s=importlib.util.spec_from_file_location('g',%r);m=importlib.util.module_from_spec(s);"
+                "s.loader.exec_module(m);m.BUDGET_S=0.0;sys.exit(m.main())" % GATE)
+        e = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": self.home, "CAST_DB_PATH": self.db}
+        e.update(env)
+        r = subprocess.run([sys.executable, "-I", "-E", "-s", "-c", code], cwd=self.repo, env=e,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def test_cli_budget_with_hatch_is_not_ok(self):
+        self._staged_a()
+        line = self._cli_zero_budget(CAST_UNREVIEWED_OK="why")
+        self.assertFalse(line.startswith("review-gate OK"), line)
+        self.assertTrue(line.startswith("review-gate WARN"), line)
+        self.assertIn("error=budget", line)
+
+    def test_cli_missing_db_with_hatch_is_not_ok(self):
+        self._staged_a()
+        line = self.gate(db=os.path.join(self.tmp, "nope.db"), CAST_UNREVIEWED_OK="why")
+        self.assertFalse(line.startswith("review-gate OK"), line)
+        self.assertIn("hatched=1", line)
+        self.assertIn("error=db-unavailable", line)
+
+    def test_not_a_repo(self):
+        d = os.path.join(self.tmp, "plain")
+        os.makedirs(d)
+        ev = self._mod().evaluate(d, db_path=self.db, home=self.home, hatch="", budget_s=10.0)
+        self.assertEqual(ev["error"], "not-a-repo")
+        self.assertEqual(ev["results"], [])
+
+    def test_missing_db_still_categorises(self):
+        self.write("a.txt", "one\n")
+        self.stage("a.txt")
+        ev = self._mod().evaluate(self.repo, db_path=os.path.join(self.tmp, "nope.db"),
+                                  home=self.home, hatch="", budget_s=10.0)
+        self.assertFalse(ev["db_ok"])
+        self.assertEqual(ev["error"], "db-unavailable")
+        self.assertEqual([(p, c) for p, c, _ in ev["results"]], [("a.txt", "unreviewed")])
+        self.assertEqual(ev["would_block"], 1)
+
+    def test_unwritable_db_dir_no_raise(self):
+        self.write("a.txt", "one\n")
+        self.stage("a.txt")
+        ev = self._mod().evaluate(self.repo, db_path="/nonexistent-dir/x.db", home=self.home,
+                                  hatch="", budget_s=10.0)
+        self.assertFalse(ev["db_ok"])
+        self.assertIsNotNone(ev["error"])
+
+    def test_hatch_param_hatches_unreviewed_not_blocked(self):
+        self.write("a.txt", "one\n")
+        self.write("b.txt", "two\n")
+        self.stage("a.txt", "b.txt")
+        self.seed("BLOCKED", {"b.txt": self.blob("b.txt")})
+        mod = self._mod()
+        calls = []
+        mod.record_hatch = calls.append
+        ev = mod.evaluate(self.repo, db_path=self.db, home=self.home, hatch="because", budget_s=10.0)
+        cats = {p: c for p, c, _ in ev["results"]}
+        self.assertEqual(cats, {"a.txt": "hatched", "b.txt": "blocked"})
+        self.assertEqual(calls, ["because"])
+
+    def test_home_param_controls_markers(self):
+        self.write("a.txt", "one\n")
+        self.stage("a.txt")
+        self.marker(self.repo)
+        mod = self._mod()
+        ev = mod.evaluate(self.repo, db_path=self.db, home=self.home, hatch="", budget_s=10.0)
+        self.assertEqual(ev["counts"]["blocked"], 1)
+        other = os.path.join(self.tmp, "otherhome")
+        os.makedirs(other)
+        ev = mod.evaluate(self.repo, db_path=self.db, home=other, hatch="", budget_s=10.0)
+        self.assertEqual(ev["counts"]["blocked"], 0)
+
+    def test_cli_writes_source_cli(self):
+        self.write("a.txt", "one\n")
+        self.stage("a.txt")
+        self.gate()
+        self.assertEqual(self.rows()[0]["source"], "cli")
+
+
 class TestSchemaAndPure(GateCase):
     def test_mode_check_constraint(self):
         conn = sqlite3.connect(self.db)
@@ -587,7 +855,7 @@ class TestSchemaAndPure(GateCase):
     def test_migrate_only_db(self):
         db = os.path.join(self.tmp, "migrated.db")
         conn = sqlite3.connect(db)
-        for name in ("037_review_snapshots.sql", "038_review_gate_decisions.sql"):
+        for name in ("037_review_snapshots.sql", "038_review_gate_decisions.sql", "039_review_mode_and_source.sql"):
             with open(os.path.join(SCRIPTS, "migrations", name)) as fh:
                 conn.executescript(fh.read())
         conn.close()
@@ -601,6 +869,43 @@ class TestSchemaAndPure(GateCase):
             self.assertEqual(len(self.rows()), 1)
         finally:
             self.db = orig
+
+    def _cols(self, db, table):
+        conn = sqlite3.connect(db)
+        try:
+            return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+        finally:
+            conn.close()
+
+    def test_migration_039_applies_on_038_level_db(self):
+        db = os.path.join(self.tmp, "m38.db")
+        conn = sqlite3.connect(db)
+        for name in ("037_review_snapshots.sql", "038_review_gate_decisions.sql"):
+            with open(os.path.join(SCRIPTS, "migrations", name)) as fh:
+                conn.executescript(fh.read())
+        with open(os.path.join(SCRIPTS, "migrations", "039_review_mode_and_source.sql")) as fh:
+            conn.executescript(fh.read())
+        conn.close()
+        self.assertIn("mode", self._cols(db, "review_snapshot_files"))
+        self.assertIn("source", self._cols(db, "review_gate_decisions"))
+
+    def test_migration_039_on_fresh_init_db_is_duplicate_column(self):
+        # db-init already added the columns; cast-migrate tolerates the duplicate-column error,
+        # so the raw script must fail ONLY with that error.
+        self.assertIn("mode", self._cols(self.db, "review_snapshot_files"))
+        self.assertIn("source", self._cols(self.db, "review_gate_decisions"))
+        conn = sqlite3.connect(self.db)
+        try:
+            with open(os.path.join(SCRIPTS, "migrations", "039_review_mode_and_source.sql")) as fh:
+                text = "\n".join(l for l in fh.read().splitlines() if not l.startswith("--"))
+                for body in [x.strip() for x in text.split(";")]:
+                    if not body:
+                        continue
+                    with self.assertRaises(sqlite3.OperationalError) as cm:
+                        conn.execute(body)
+                    self.assertIn("duplicate column", str(cm.exception))
+        finally:
+            conn.close()
 
     def _mod(self):
         import importlib.util

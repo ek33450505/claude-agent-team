@@ -9,6 +9,12 @@ or "DELETED"). Paths whose value is identical at start and stop (stable_files) w
 for the whole review. record() persists one review_snapshots row (scope='files') plus one row
 per path the CALLER passes: the stop hook passes stable_files (APPROVE) or start|stop (BLOCKED).
 
+Worktrees: the start hook snapshots the cwd's repo root AND every other linked worktree of it
+(list_worktrees: cwd root first, then most recently active, capped at MAX_WORKTREES, one shared
+deadline). The stop hook binds only the worktrees the reviewer actually touched. A BLOCKED
+review with both snapshots present but a clean tree (empty union) records nothing for that
+root; degraded scope='repo' rows are only for the case where neither snapshot exists.
+
 Every function here is fail-closed and never raises: take_snapshot/load_start return None,
 save_start/record/record_degraded_block return False, parse_verdict returns None, decide
 returns "BLOCKED".
@@ -60,11 +66,15 @@ from typing import Dict, List, Optional
 MAX_PATHS = 2000
 MAX_BYTES = 50 * 1024 * 1024
 MAX_STATE_BYTES = 10 * 1024 * 1024
+MAX_WORKTREES = 32
+MAX_WORKTREE_RECORDS = 256
+_GITFILE_MAX = 4096
 MAX_VERDICT_TEXT = 1024 * 1024
 STALE_TMP_SECONDS = 3600
 _HASH_BATCH = 200
 _GIT_TIMEOUT = 30.0
 DELETED = "DELETED"
+GIT_MODES = frozenset({"100644", "100755", "120000"})
 
 _GIT_SAFE_MOD = None  # None=unattempted, False=load failed, module=loaded
 
@@ -192,6 +202,7 @@ def take_snapshot(repo_dir: str, deadline_s: Optional[float] = None) -> Optional
             return None
 
         files = {}  # type: Dict[str, str]
+        modes = {}  # type: Dict[str, str]
         to_hash = []  # type: List[str]
         total = 0
         fmt = None
@@ -214,11 +225,13 @@ def take_snapshot(repo_dir: str, deadline_s: Optional[float] = None) -> Optional
                         return None
                     fmt = _object_format(root, t)
                 files[rel] = _symlink_blob(full, fmt)
+                modes[rel] = "120000"
             elif stat.S_ISREG(lst.st_mode):
                 total += lst.st_size
                 if total > MAX_BYTES:
                     return None
                 to_hash.append(rel)
+                modes[rel] = "100755" if lst.st_mode & stat.S_IXUSR else "100644"  # git's rule
             # directories (submodules / nested repos) and special files are left out:
             # an absent path is simply "not covered", which is the safe direction.
 
@@ -236,13 +249,159 @@ def take_snapshot(repo_dir: str, deadline_s: Optional[float] = None) -> Optional
             if len(shas) != len(batch) or not all(re.fullmatch(r"[0-9a-f]{40,64}", s) for s in shas):
                 return None
             files.update(zip(batch, shas))
-        return {"repo_root": root, "files": files}
+        return {"repo_root": root, "files": files, "modes": modes}
     except Exception:
         return None
 
 
+def _worktree_recency(wt: str) -> float:
+    """mtime of the worktree's index (a proxy for 'recently active'); 0 when unknown."""
+    try:
+        dotgit = os.path.join(wt, ".git")
+        st = os.lstat(dotgit)
+        if stat.S_ISDIR(st.st_mode):
+            gitdir = dotgit
+        elif stat.S_ISREG(st.st_mode):
+            fd = os.open(dotgit, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                raw = os.read(fd, _GITFILE_MAX)
+            finally:
+                os.close(fd)
+            line = raw.decode("utf-8", "replace").split("\n", 1)[0]
+            if not line.startswith("gitdir:"):
+                return 0.0
+            gitdir = line[len("gitdir:"):].strip()
+            if not os.path.isabs(gitdir):
+                gitdir = os.path.join(wt, gitdir)
+        else:
+            return 0.0
+        return os.stat(os.path.join(gitdir, "index")).st_mtime
+    except Exception:
+        return 0.0
+
+
+def list_worktrees(repo_dir: str, timeout: float = _GIT_TIMEOUT) -> Optional[List[str]]:
+    """Realpaths of repo_dir's toplevel (first) plus every other live linked worktree.
+
+    Others are ordered most-recently-active first (worktree index mtime) and capped at
+    MAX_WORKTREES in total (at most MAX_WORKTREE_RECORDS git records are parsed; `timeout` is
+    the deadline for the whole call). Bare and prunable records and vanished dirs are skipped. On any
+    failure returns [toplevel] when known, else None. Never raises.
+    """
+    try:
+        if not isinstance(repo_dir, str) or not repo_dir:
+            return None
+        end = time.monotonic() + timeout
+        top = resolve_repo_root(repo_dir, timeout)
+        if top is None:
+            return None
+        rem = end - time.monotonic()
+        if rem <= 0:
+            return [top]
+        res = _git(top, ["worktree", "list", "--porcelain", "-z"], min(_GIT_TIMEOUT, rem))
+        if res is None or res.returncode != 0:
+            return [top]
+        others = []  # type: List[str]
+        seen = {top}
+        rec = []  # type: List[str]
+        nrec = 0
+        for field in res.stdout.split("\0") + [""]:
+            if nrec >= MAX_WORKTREE_RECORDS:
+                break
+            if field:
+                rec.append(field)
+                continue
+            if not rec:
+                continue
+            path = None
+            skip = False
+            for f in rec:
+                if f.startswith("worktree "):
+                    path = f[len("worktree "):]
+                elif f == "bare" or f == "prunable" or f.startswith("prunable "):
+                    skip = True
+            rec = []
+            nrec += 1
+            if skip or not path or not os.path.isdir(path):
+                continue
+            real = os.path.realpath(path)
+            if real not in seen:
+                seen.add(real)
+                others.append(real)
+        # Recency stat is bounded by the same deadline; once spent the rest rank 0 (git's order).
+        rank = {}  # type: Dict[str, float]
+        for wt in others:
+            rank[wt] = _worktree_recency(wt) if time.monotonic() < end else 0.0
+        others.sort(key=lambda w: rank[w], reverse=True)  # stable: ties keep git's order
+        return ([top] + others)[:MAX_WORKTREES]
+    except Exception:
+        return None
+
+
+def repo_identity(path: str, timeout: float = _GIT_TIMEOUT) -> Optional[tuple]:
+    """(realpath toplevel, realpath absolute git-common-dir) of the repo containing path, or None.
+
+    path may be a file or a nonexistent path: the nearest existing ancestor directory is used.
+    One cast_git_safe call. Never raises.
+    """
+    try:
+        if not isinstance(path, str) or not path or timeout <= 0:
+            return None
+        d = path
+        while d and not os.path.isdir(d):
+            parent = os.path.dirname(d)
+            if parent == d:
+                return None
+            d = parent
+        res = _git(d, ["rev-parse", "--show-toplevel", "--git-common-dir"], min(_GIT_TIMEOUT, timeout))
+        if res is None or res.returncode != 0:
+            return None
+        lines = res.stdout.split("\n")
+        if len(lines) < 2 or not lines[0] or not lines[1]:
+            return None
+        common = lines[1] if os.path.isabs(lines[1]) else os.path.join(d, lines[1])
+        return os.path.realpath(lines[0]), os.path.realpath(common)
+    except Exception:
+        return None
+
+
+def take_snapshots(repo_dir: str, deadline_s: Optional[float] = None) -> Optional[Dict[str, dict]]:
+    """{root: take_snapshot(root)} over list_worktrees(repo_dir) under ONE shared deadline.
+
+    Roots whose snapshot fails (or arrives after the deadline) are omitted; None if nothing
+    snapped. Dict order is the list order (the cwd's own root first).
+    """
+    try:
+        end = None if deadline_s is None else time.monotonic() + deadline_s
+        roots = list_worktrees(repo_dir, _GIT_TIMEOUT if end is None else max(0.0, deadline_s))
+        if not roots:
+            return None
+        out = {}  # type: Dict[str, dict]
+        for root in roots:
+            rem = None
+            if end is not None:
+                rem = end - time.monotonic()
+                if rem <= 0:
+                    break
+            snap = take_snapshot(root, rem)
+            if snap and isinstance(snap.get("repo_root"), str):
+                out[snap["repo_root"]] = snap
+        return out or None
+    except Exception:
+        return None
+
+
+def _valid_modes(modes) -> bool:
+    return isinstance(modes, dict) and all(
+        isinstance(k, str) and v in GIT_MODES for k, v in modes.items())
+
+
 def stable_files(start: dict, stop: dict) -> dict:
-    """Paths present in both snapshots with an identical value; {} unless repo_root matches."""
+    """Paths with the same blob AND the same git mode at start and stop; {} unless repo_root matches.
+
+    A non-DELETED path without a mode in either snapshot (old-format / invalid `modes`) is NOT
+    stable: fail closed. DELETED paths carry no mode.
+    """
     try:
         if not isinstance(start, dict) or not isinstance(stop, dict):
             return {}
@@ -252,7 +411,28 @@ def stable_files(start: dict, stop: dict) -> dict:
         a, b = start.get("files"), stop.get("files")
         if not isinstance(a, dict) or not isinstance(b, dict):
             return {}
-        return {p: v for p, v in a.items() if p in b and b[p] == v}
+        ma, mb = start.get("modes"), stop.get("modes")
+        ma = ma if _valid_modes(ma) else {}
+        mb = mb if _valid_modes(mb) else {}
+        out = {}
+        for p, v in a.items():
+            if p not in b or b[p] != v:
+                continue
+            if v != DELETED and (p not in ma or p not in mb or ma[p] != mb[p]):
+                continue
+            out[p] = v
+        return out
+    except Exception:
+        return {}
+
+
+def modes_for(files: dict, snap: Optional[dict]) -> dict:
+    """{path: mode} for the non-DELETED paths of `files` that `snap` has a valid mode for."""
+    try:
+        m = snap.get("modes") if isinstance(snap, dict) else None
+        if not _valid_modes(m):
+            return {}
+        return {p: m[p] for p in files if files[p] != DELETED and p in m}
     except Exception:
         return {}
 
@@ -404,7 +584,7 @@ def _insert(
     scope: str,
     started_at: Optional[str],
     ended_at: Optional[str],
-    rows: List[tuple],
+    rows: List[tuple],  # (path_key, blob, mode|None)
 ) -> bool:
     """One transaction: parent row + child rows. mode=rw never creates a missing DB file.
 
@@ -425,8 +605,8 @@ def _insert(
             )
             if rows:
                 conn.executemany(
-                    "INSERT INTO review_snapshot_files (snapshot_id, path, blob) VALUES (?, ?, ?)",
-                    [(cur.lastrowid, p, b) for p, b in rows],
+                    "INSERT INTO review_snapshot_files (snapshot_id, path, blob, mode) VALUES (?, ?, ?, ?)",
+                    [(cur.lastrowid, p, b, m) for p, b, m in rows],
                 )
             conn.execute("COMMIT")
         except Exception:
@@ -454,6 +634,7 @@ def record(
     started_at: Optional[str],
     ended_at: Optional[str],
     files: dict,
+    modes: Optional[dict] = None,
 ) -> bool:
     """Insert one review_snapshots row (scope='files') + one row per path, atomically.
 
@@ -461,6 +642,9 @@ def record(
     False. Never raises. CONTRACT: if this returns False for decision == "BLOCKED" (or the
     snapshot could not be taken at all), the caller MUST fall back to record_degraded_block()
     so a BLOCK is never lost to a snapshot/record failure.
+
+    modes: optional {path: git mode} written to review_snapshot_files.mode (NULL when absent or
+    not one of 100644/100755/120000; the gate never approves a NULL-mode non-deletion).
     """
     try:
         if decision not in ("APPROVE", "BLOCKED") or not reviewer or not repo_root:
@@ -474,7 +658,8 @@ def record(
             key = path_key(p)
             if not key:
                 return False
-            rows.append((key, b))
+            m = modes.get(p) if isinstance(modes, dict) else None
+            rows.append((key, b, m if m in GIT_MODES and b != DELETED else None))
         return _insert(db_path, session_id, agent_id, reviewer, repo_root, decision,
                        "files", started_at, ended_at, rows)
     except Exception:
@@ -547,25 +732,39 @@ def _sweep_stale_tmp(state_dir: str) -> None:
         pass
 
 
-def save_start(state_dir: str, agent_id: str, snap: dict, *,
+def save_start(state_dir: str, agent_id: str, snaps: Dict[str, dict], *,
                session_id: Optional[str], reviewer: str) -> bool:
-    """Atomically write <state_dir>/<agent_id>.json (0600), bound to session_id + reviewer."""
+    """Atomically write <state_dir>/<agent_id>.json (0600), bound to session_id + reviewer.
+
+    snaps: {repo_root: snapshot}, cwd root first. Envelope v2; roots are added in order and
+    adding stops once the encoded envelope would exceed MAX_STATE_BYTES (first root survives).
+    """
     tmp = None
     try:
         if not isinstance(agent_id, str) or not _AGENT_ID_RE.fullmatch(agent_id):
             return False
         if not _opt_str(session_id) or not isinstance(reviewer, str) or not reviewer:
             return False
-        if not isinstance(snap, dict) or not isinstance(snap.get("repo_root"), str):
+        if not isinstance(snaps, dict) or not snaps:
             return False
-        data = json.dumps({
+        env = {
+            "v": 2,
             "session_id": session_id,
             "reviewer": reviewer,
-            "repo_root": snap["repo_root"],
-            "snap": snap,
+            "snaps": {},
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }).encode("utf-8")
-        if len(data) > MAX_STATE_BYTES or not _state_dir_ok(state_dir, create=True):
+        }
+        data = b""
+        for root, snap in snaps.items():
+            if not isinstance(root, str) or not isinstance(snap, dict) or snap.get("repo_root") != root:
+                continue
+            env["snaps"][root] = snap
+            enc = json.dumps(env).encode("utf-8")
+            if len(enc) > MAX_STATE_BYTES:
+                del env["snaps"][root]
+                break
+            data = enc
+        if not data or not _state_dir_ok(state_dir, create=True):
             return False
         _sweep_stale_tmp(state_dir)
         tmp = os.path.join(state_dir, ".%s.%d.tmp" % (agent_id, os.getpid()))
@@ -585,12 +784,25 @@ def save_start(state_dir: str, agent_id: str, snap: dict, *,
                 pass
 
 
+def _valid_snap(snap, root) -> bool:
+    if isinstance(snap, dict) and "modes" in snap and not _valid_modes(snap["modes"]):
+        snap.pop("modes")  # invalid modes: drop them so the snap's paths are never stable
+    return (
+        isinstance(snap, dict)
+        and isinstance(root, str)
+        and snap.get("repo_root") == root
+        and isinstance(snap.get("files"), dict)
+        and all(isinstance(k, str) and isinstance(v, str) for k, v in snap["files"].items())
+    )
+
+
 def load_start(state_dir: str, agent_id: str, *,
                session_id: Optional[str], reviewer: str) -> Optional[dict]:
-    """Read and DELETE <state_dir>/<agent_id>.json; the snapshot (plus `started_at`), or None.
+    """Read and DELETE <state_dir>/<agent_id>.json -> {"started_at": str|None, "snaps": {root: snap}}.
 
     None when absent / invalid / oversized / not a regular file, or when the stored
     session_id + reviewer do not both match the caller's (the file is consumed either way).
+    Accepts the v1 envelope (single snapshot) and converts it to the v2 shape.
     """
     try:
         if not isinstance(agent_id, str) or not _AGENT_ID_RE.fullmatch(agent_id):
@@ -619,19 +831,21 @@ def load_start(state_dir: str, agent_id: str, *,
             return None
         if env.get("session_id") != session_id or env.get("reviewer") != reviewer:
             return None
-        snap = env.get("snap")
-        if (
-            isinstance(snap, dict)
-            and isinstance(snap.get("repo_root"), str)
-            and snap.get("repo_root") == env.get("repo_root")
-            and isinstance(snap.get("files"), dict)
-            and all(isinstance(k, str) and isinstance(v, str) for k, v in snap["files"].items())
-        ):
-            started = env.get("started_at")
-            if isinstance(started, str) and started:
-                snap = dict(snap, started_at=started)
-            return snap
-        return None
+        started = env.get("started_at")
+        started = started if isinstance(started, str) and started else None
+        if env.get("v") == 2:
+            raw = env.get("snaps")
+            if not isinstance(raw, dict) or not raw:
+                return None
+            if not all(_valid_snap(sn, root) for root, sn in raw.items()):
+                return None
+            snaps = dict(raw)
+        else:  # v1: one snapshot, repo_root duplicated at the top level
+            snap = env.get("snap")
+            if not (_valid_snap(snap, env.get("repo_root"))):
+                return None
+            snaps = {snap["repo_root"]: snap}
+        return {"started_at": started, "snaps": snaps}
     except Exception:
         return None
 
@@ -673,9 +887,9 @@ def main(argv=None) -> int:
         if args.cmd != "start" or is_reviewer(args.reviewer) is None:
             return 0
         cwd = args.cwd or os.getcwd()
-        snap = take_snapshot(cwd, deadline_s=START_DEADLINE_S)
-        if snap:
-            save_start(default_state_dir(), args.agent_id, snap,
+        snaps = take_snapshots(cwd, deadline_s=START_DEADLINE_S)
+        if snaps:
+            save_start(default_state_dir(), args.agent_id, snaps,
                        session_id=args.session_id or None, reviewer=args.reviewer)
         return 0
     except BaseException:
