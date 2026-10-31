@@ -1,8 +1,9 @@
 #!/usr/bin/env bats
 # tests/agents/commit-review-gate-pin.bats
-# Pins the G1 WARN-only review-gate wiring in agents/core/commit.md: the exact
-# command, the section, the never-blocks contract, the Work Log field and the
-# explicit-reason hatch rule. Reads the agent file only (no HOME writes).
+# Pins the U4 review-gate wiring in agents/core/commit.md: the gate now runs in the
+# PreToolUse git guard (WARN only), so the agent documents the REQUIRED commit shape and
+# the explicit-reason hatch rule, and no longer runs `cast review-gate` itself.
+# Reads the agent file only (no HOME writes).
 
 bats_require_minimum_version 1.5.0
 
@@ -11,52 +12,60 @@ load '../test_helper/bats-assert/load'
 
 COMMIT_MD="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/core" && pwd)/commit.md"
 
-# Print the body of the "## Review Gate (G1" section (fence-aware).
+# Print the body of the "## Review Gate (U4" section (fence-aware).
 review_gate_section() {
   awk '
     /^```/ { if (f) infence = !infence; if (f) print; next }
-    !infence && /^## Review Gate \(G1/ { f = 1; next }
+    !infence && /^## Review Gate \(U4/ { f = 1; next }
     !infence && /^## / { f = 0 }
     f { print }
   ' "$COMMIT_MD"
 }
 
-@test "commit.md carries the exact review-gate command" {
-  run grep -cFx 'cast review-gate' "$COMMIT_MD"
-  assert_success
-  # The old direct-script form names ~/.claude/scripts, which the protected-write
-  # guard blocks; it must not come back.
-  run grep -cF '.claude/scripts/cast-review-gate.py' "$COMMIT_MD"
+@test "commit.md has the Review Gate (U4 - WARN only) section heading" {
+  run grep -c '^## Review Gate (U4 — WARN only, never blocks)$' "$COMMIT_MD"
+  assert_output 1
+}
+
+@test "commit.md no longer instructs running cast review-gate or logging a Review gate: line" {
+  run grep -cF 'cast review-gate' "$COMMIT_MD"
+  assert_output 0
+  run grep -cF 'Review gate:' "$COMMIT_MD"
   assert_output 0
 }
 
-@test "commit.md has the Review Gate (G1 - WARN only) section heading" {
-  run grep -c '^## Review Gate (G1 — WARN only, never blocks)$' "$COMMIT_MD"
-  assert_output 1
-}
-
-@test "Review Gate section says it never blocks and puts the command inside it" {
+@test "Review Gate section says the guard runs it, warn-only, and never blocks" {
   run review_gate_section
   assert_success
+  assert_output --partial 'PreToolUse git guard'
+  assert_output --partial 'WARN-only'
   assert_output --partial 'never blocks'
-  assert_output --partial 'cast review-gate'
 }
 
-@test "Work Log template has a Review gate: field" {
-  run grep -cF -- '- Review gate: [verbatim review-gate line | not run (<reason>)]' "$COMMIT_MD"
-  assert_output 1
+@test "Review Gate section documents the required commit shape" {
+  run review_gate_section
+  assert_output --partial 'CAST_COMMIT_AGENT=1 git [-C <repo-root>] commit -F <msg-file>'
+  assert_output --partial 'FIRST command segment'
 }
 
-@test "hatch sentence names CAST_UNREVIEWED_OK and requires an explicit dispatch reason" {
-  run bash -c "grep -F 'CAST_UNREVIEWED_OK' '$COMMIT_MD' | grep -F 'explicitly'"
-  assert_success
+@test "Review Gate section documents the docs-only hatch shape with an explicit dispatch reason" {
+  run review_gate_section
+  assert_output --partial 'CAST_COMMIT_AGENT=1 CAST_UNREVIEWED_OK=<reason> git commit -F <msg-file>'
+  assert_output --partial 'explicitly'
 }
 
 @test "hatch reason is restricted to a safe character set, else the hatch is skipped" {
-  run grep -cF 'letters, digits, spaces' "$COMMIT_MD"
+  run grep -cF 'ONE UNQUOTED word of letters, digits and' "$COMMIT_MD"
   assert_output 1
   run grep -cF 'hatch skipped (unsafe reason)' "$COMMIT_MD"
   assert_output 1
+}
+
+@test "step 7 capture form uses literal paths and has no LOG variable" {
+  run grep -cF 'CAST_COMMIT_AGENT=1 git commit -F <msg-file> > <log-path> 2>&1; rc=$?; echo "commit rc=$rc"' "$COMMIT_MD"
+  assert_output 1
+  run grep -cF '$LOG' "$COMMIT_MD"
+  assert_output 0
 }
 
 @test "Approval Gate section is still present (Tier 2 untouched)" {

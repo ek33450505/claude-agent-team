@@ -220,6 +220,46 @@ class TestChecks(CanaryBase):
         _, out = self.run_main()
         self.assertNotIn("TEAMMATE_CUSTOM_TYPE", self.codes(out))
 
+    def test_custom_agent_type_ignores_builtin_teammates(self):
+        # built-in types never carry customAgentType; they must not dilute the ratio
+        base = {k: v for k, v in self.MATE.items() if k != "customAgentType"}
+        for _ in range(10):
+            self.sidecar({**base, "spawnedAgentType": "general-purpose"})
+        for _ in range(2):
+            self.sidecar({**self.MATE, "spawnedAgentType": "code-reviewer"})
+        _, out = self.run_main()
+        self.assertNotIn("TEAMMATE_CUSTOM_TYPE", self.codes(out))
+
+    def test_custom_agent_type_fires_for_roster_teammates(self):
+        base = {k: v for k, v in self.MATE.items() if k != "customAgentType"}
+        for _ in range(6):
+            self.sidecar({**base, "spawnedAgentType": "code-reviewer"})
+        _, out = self.run_main()
+        f = [x for x in out["findings"] if x["code"] == "TEAMMATE_CUSTOM_TYPE"]
+        self.assertEqual([x["severity"] for x in f], ["drift"])
+        self.assertIn("0 of 6 roster teammate", f[0]["detail"])
+
+    def test_custom_agent_type_fires_without_spawned_agent_type(self):
+        # a renamed spawnedAgentType must stay in the denominator, not go silent
+        base = {k: v for k, v in self.MATE.items() if k != "customAgentType"}
+        for _ in range(6):
+            self.sidecar(base)
+        _, out = self.run_main()
+        self.assertIn("TEAMMATE_CUSTOM_TYPE", self.codes(out, "drift"))
+
+    def test_new_claude_code_keys_are_known(self):
+        self.sidecar({**GOOD, "finished": True, "launchedWithDefaults": True})
+        _, out = self.run_main()
+        self.assertNotIn("SIDECAR_NEW_KEYS", self.codes(out))
+
+    def test_custom_agent_type_unhashable_spawned_type_counts_as_roster(self):
+        base = {k: v for k, v in self.MATE.items() if k != "customAgentType"}
+        for _ in range(6):
+            self.sidecar({**base, "spawnedAgentType": ["x"]})
+        rc, out = self.run_main()
+        self.assertEqual((rc, out["state"]), (1, "drift"))
+        self.assertIn("TEAMMATE_CUSTOM_TYPE", self.codes(out, "drift"))
+
     def test_hatch_agent_id_fires_and_silent(self):
         self.hatch(agent_id="")
         rc, out = self.run_main()

@@ -58,3 +58,72 @@ teardown() {
   # Cleanup temp backup root
   rm -rf "$CAST_BACKUP_ROOT"
 }
+
+# --- Overlay sync freshness (doctor line after check 18) ---
+
+_overlay_stamp() {
+  # $1 = hours ago -> UTC stamp (python3: BSD/GNU date flags differ)
+  python3 -I -c 'import sys,time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()-int(sys.argv[1])*3600)))' "$1"
+}
+
+@test "doctor Overlay OK when last sync was 1h ago" {
+  export CAST_BACKUP_ROOT="$(mktemp -d)"
+  mkdir -p "$HOME/.claude/logs"
+  printf '[%s] [info] Overlay sync complete\n' "$(_overlay_stamp 1)" > "$HOME/.claude/logs/cast-overlay-sync.log"
+
+  run bash "$REPO_DIR/bin/cast" doctor
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+  echo "$output" | grep -qF "Overlay: last sync 1h ago"
+  echo "$output" | grep -F "Overlay:" | grep -qF "[ok]"
+  ! echo "$output" | grep -F "Overlay:" | grep -qF "[!!]"
+  rm -rf "$CAST_BACKUP_ROOT"
+}
+
+@test "doctor Overlay ignores a future-dated forged success line (WARN)" {
+  export CAST_BACKUP_ROOT="$(mktemp -d)"
+  mkdir -p "$HOME/.claude/logs"
+  {
+    printf '[%s] [info] Overlay sync complete\n' "$(_overlay_stamp 100)"
+    printf '[%s] [info] Overlay sync complete\n' "$(_overlay_stamp -48)"
+  } > "$HOME/.claude/logs/cast-overlay-sync.log"
+
+  run bash "$REPO_DIR/bin/cast" doctor
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -F "Overlay:" | grep -qF "[!!]"
+  echo "$output" | grep -qF "last successful sync 100h ago"
+  rm -rf "$CAST_BACKUP_ROOT"
+}
+
+@test "doctor Overlay prints control bytes in the error text as ?" {
+  export CAST_BACKUP_ROOT="$(mktemp -d)"
+  mkdir -p "$HOME/.claude/logs"
+  printf '[%s] [error] bad\033[31m\rthing\a\n' "$(_overlay_stamp 1)" > "$HOME/.claude/logs/cast-overlay-sync.log"
+
+  run bash "$REPO_DIR/bin/cast" doctor
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -qF 'last error: bad?[31m?thing?'
+  ! printf '%s' "$output" | grep -q "$(printf '\033')"
+  rm -rf "$CAST_BACKUP_ROOT"
+}
+
+@test "doctor Overlay WARN when last success is 100h old, with the newest error" {
+  export CAST_BACKUP_ROOT="$(mktemp -d)"
+  mkdir -p "$HOME/.claude/logs"
+  {
+    printf '[%s] [info] Overlay sync complete\n' "$(_overlay_stamp 100)"
+    printf '[%s] [error] Failed to pull from origin\n' "$(_overlay_stamp 2)"
+  } > "$HOME/.claude/logs/cast-overlay-sync.log"
+
+  run bash "$REPO_DIR/bin/cast" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "!!] Overlay: last successful sync 100h ago (threshold 72h); last error: Failed to pull from origin" ]]
+  rm -rf "$CAST_BACKUP_ROOT"
+}
+
+@test "doctor prints no Overlay line when the overlay log is absent" {
+  export CAST_BACKUP_ROOT="$(mktemp -d)"
+  run bash "$REPO_DIR/bin/cast" doctor
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+  [[ ! "$output" =~ "Overlay:" ]]
+  rm -rf "$CAST_BACKUP_ROOT"
+}

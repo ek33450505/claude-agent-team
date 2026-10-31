@@ -35,6 +35,21 @@ if _SCRIPTS_DIR not in sys.path:
 import cast_subagent_stop as css  # noqa: E402
 
 _MIGRATION = _REPO / "scripts" / "migrations" / "037_review_snapshots.sql"
+_MIGRATION_039 = _REPO / "scripts" / "migrations" / "039_review_mode_and_source.sql"
+
+
+def _migrate(conn):
+    """Apply 037 then 039 (mode column), tolerating re-runs as cast-migrate.py does."""
+    conn.executescript(_MIGRATION.read_text())
+    sql = "\n".join(l for l in _MIGRATION_039.read_text().splitlines() if not l.strip().startswith("--"))
+    for body in (b.strip() for b in sql.split(";")):
+        if not body:
+            continue
+        try:
+            conn.execute(body)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc) and "no such table" not in str(exc):
+                raise
 BLOCK_TEXT = "Bad.\nVerdict: BLOCKED\nStatus: BLOCKED\n"
 APPROVE_TEXT = "Looks fine.\nVerdict: APPROVE\nStatus: DONE\n"
 
@@ -66,7 +81,7 @@ class _Base(unittest.TestCase):
         _env.start()
         self.addCleanup(_env.stop)
         conn = sqlite3.connect(self.db)
-        conn.executescript(_MIGRATION.read_text())
+        _migrate(conn)
         conn.close()
         self.repo = os.path.join(self.tmp, "repo")
         os.makedirs(self.repo)

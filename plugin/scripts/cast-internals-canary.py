@@ -31,9 +31,12 @@ A "teammate" sidecar is one carrying ANY of taskKind, teamName,
 customAgentType, color, planModeRequired, permissionMode. TEAMMATE_MARKERS
 fires when a teammate lacks taskKind or teamName (the spoof check at
 cast_subagent_stop.py:431 needs both); TEAMMATE_CUSTOM_TYPE fires when, with
->= 5 teammates, under half carry customAgentType (_roster_type_from_meta
-fails closed without it). PAYLOAD_AGENT_ID judges only the newest 20 in-window
-agent_runs rows, so a payload rename surfaces quickly.
+>= 5 roster teammates, under half carry customAgentType (_roster_type_from_meta
+fails closed without it). Roster teammates are teammates whose
+spawnedAgentType is not a built-in type (general-purpose, Explore, ...), which
+never carry customAgentType; a missing or non-string spawnedAgentType still
+counts. PAYLOAD_AGENT_ID judges only the newest 20 in-window agent_runs rows,
+so a payload rename surfaces quickly.
 
 Usage:  cast-internals-canary.py [--json] [--home DIR] [--days N]   (N in 1..30)
 
@@ -66,7 +69,13 @@ KNOWN_KEYS = frozenset({
     "teamName", "color", "planModeRequired", "permissionMode",
     "customAgentType", "spawnedAgentType", "worktreePath",
     "spawnedWithWorktree", "worktreeBranch", "parentAgentId", "workflowPhase",
-    "isFork",
+    "isFork", "finished", "launchedWithDefaults",
+})
+# Built-in agent types never carry customAgentType. A teammate WITHOUT
+# spawnedAgentType stays in the TEAMMATE_CUSTOM_TYPE denominator, so a rename
+# of spawnedAgentType still alarms instead of going silent.
+BUILTIN_AGENT_TYPES = frozenset({
+    "general-purpose", "Explore", "Plan", "claude-code-guide", "statusline-setup",
 })
 # Only key names matching this are ever printed (fullmatch, so no newline slip).
 SAFE_KEY_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,31}")
@@ -262,11 +271,15 @@ def evaluate(in_window, n_sampled, parsed, unparsable, hatch, db):
         add("TEAMMATE_MARKERS", "drift",
             f"{n_unpaired} of {len(mates)} teammate sidecars lack taskKind or teamName")
 
-    if len(mates) >= 5:
-        n_ct = sum(1 for s in mates if _nonempty_str(s.get("customAgentType")))
-        if n_ct / len(mates) < 0.5:
+    # isinstance guard: a list/dict value is unhashable and would raise on the lookup
+    roster = [s for s in mates
+              if not (isinstance(s.get("spawnedAgentType"), str)
+                      and s["spawnedAgentType"] in BUILTIN_AGENT_TYPES)]
+    if len(roster) >= 5:
+        n_ct = sum(1 for s in roster if _nonempty_str(s.get("customAgentType")))
+        if n_ct / len(roster) < 0.5:
             add("TEAMMATE_CUSTOM_TYPE", "drift",
-                f"only {n_ct} of {len(mates)} teammate sidecars carry customAgentType")
+                f"only {n_ct} of {len(roster)} roster teammate sidecars carry customAgentType")
 
     n_hatch_noid = sum(1 for h in hatch
                        if _nonempty_str(h.get("agent_type"))

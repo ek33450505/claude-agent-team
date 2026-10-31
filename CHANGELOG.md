@@ -4,6 +4,81 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.7.0] — 2026-10-30
+
+**Upgrading:** run `bash install.sh`. It applies migration 039 (`cast-migrate.py --confirm`; `cast-db-init.sh` also
+self-heals the two new columns) and delivers the new commit-agent instructions, so commit dispatches change. After the
+upgrade the guard writes a decision row for each commit-agent commit that has a hook cwd and budget left, and
+SubagentStart snapshots up to 32 worktrees
+within its 2 s deadline.
+
+### Fixed
+- **The review-gate recorder never saw sibling worktrees.** Snapshots covered only the git toplevel of the session's
+  cwd, so a review of a linked worktree (`git worktree add`) recorded nothing, and the clean main checkout produced
+  "APPROVE not recorded: nothing stable" or a repo-wide BLOCK. In the WARN week, 344 of 389 gate decisions (88%) would
+  have blocked. SubagentStart now snapshots every linked worktree: cwd first, then by index recency, at most 32,
+  within the 2 s deadline. At SubagentStop:
+  - an APPROVE binds only the worktrees the reviewer opened files in, taken from Read, Grep and Glob inputs in its
+    transcript, with the cwd root as the fallback;
+  - a BLOCKED verdict binds every candidate worktree when the transcript is unreadable or shows no such reads;
+  - same-repo worktrees created during the review get stop-only BLOCK rows;
+  - if that discovery is incomplete, the default repo also gets a repo-wide BLOCK.
+- **A BLOCK on a clean tree became a repo-wide BLOCK.** When both snapshots exist and neither has a dirty file, a
+  BLOCKED verdict now records nothing. With one snapshot missing, a BLOCKED verdict records a file-scoped row over that
+  snapshot's dirty files. It degrades to a repo-scope BLOCK only when that set is empty or the write fails.
+- **A BLOCK was permanent.** After a BLOCK, a fix and a re-review, every file the fix did not touch stayed blocked:
+  306 of 917 blocked blobs were later approved unchanged. A BLOCK by reviewer type T on a blob is now cleared by a
+  type-T APPROVE of the same blob that started after the BLOCK ended. APPROVE rows with implausible timestamps are
+  ignored. A security BLOCK still needs a security APPROVE.
+- **`cast review-gate` could print OK when the gate errored.** With `CAST_UNREVIEWED_OK` set, a spent budget or an
+  unavailable DB still printed `review-gate OK`. A would-block line now reads WARN and carries `; error=<name>`
+  (`budget`, `db-unavailable`). An unavailable DB without a hatch, which used to print OK, now prints WARN too. A
+  git-diff failure or an internal exception prints `review-gate: error (<reason>)` instead.
+- **The off-machine overlay backup has logged a failure on every run since 2026-08-22.** A secret-scan abort ran plain
+  `git reset`, which left the mirror clone dirty, so every later `git pull --rebase` refused. `cast-overlay-sync.sh`
+  now:
+  - refuses an empty HOME;
+  - unsets `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and
+    `GIT_ALTERNATE_OBJECT_DIRECTORIES`;
+  - on an existing clone, checks before any git write that the clone is its own toplevel and that origin matches
+    `CAST_OVERLAY_REPO` after URL normalisation. On a first run, `gh repo create` and the initial clone run before that
+    check;
+  - restores a dirty mirror with a gated `git reset --hard HEAD` before pulling, after a secret abort, and after a dry
+    run. Untracked files are kept.
+- **`cast doctor` showed a false `[ERR] TEAMMATE_CUSTOM_TYPE`.** Built-in teammates such as `general-purpose` never
+  carry `customAgentType`, so a general-purpose fan-out tripped the check. It now judges only roster teammates.
+  `finished` and `launchedWithDefaults` are known sidecar keys.
+
+### Changed
+- **The review gate runs inside the PreToolUse git guard (WARN).** On every commit made through the commit-agent hatch,
+  the guard evaluates the staged content in-process and writes a `review_gate_decisions` row with `source='guard'`. It
+  skips the row when the hook payload has no cwd, or when 0.05 s or less of budget remains; a spent gate budget
+  writes an `error=budget` row. It never blocks in this release.
+  - Inputs are fixed: the home directory comes from the passwd entry, and the DB and gate module sit at fixed paths.
+    `HOME`, `CAST_DB_PATH` and `CAST_UNREVIEWED_OK` are not read from the environment; the hatch comes from the
+    command's own leading assignment.
+  - Commands the index check cannot vouch for are logged as unverifiable. That covers shell expansion characters,
+    globs, quoted assignments, pipelines, multi-line commands, a commit that is not the first segment, pathspecs,
+    options outside an allowlist such as `-a` and `--no-verify`, and redirects into `.git` or `~/.claude`. A test
+    compares the parsed tokens with real bash argv, and with zsh argv when zsh is installed.
+  - The gate's budget is 2 s from its own start, and never more than 4 s from guard entry, which keeps it below the
+    dispatcher's 5 s timeout.
+- **The commit agent no longer runs `cast review-gate`.** It must commit with
+  `CAST_COMMIT_AGENT=1 git [-C <repo-root>] commit -F <msg-file>` as the first command segment. A docs-only or
+  release-stamp commit adds `CAST_UNREVIEWED_OK=<one-word-reason>`.
+- **Approvals bind the git file mode.** Migration 039 adds `review_snapshot_files.mode` and
+  `review_gate_decisions.source`, and an APPROVE must match the staged mode. Rows written before 039 carry no mode, so
+  they no longer approve a staged file with content. A staged deletion still matches a pre-039 deletion row, because
+  the deletion check skips the mode.
+- **The plugin/ and cast-stats.json exemption requires CAST's root commit.** File presence alone no longer makes a
+  repository "CAST".
+- **The gate's `evaluate()` fails closed.** Any error other than not-a-repo returns `would_block=1`.
+
+### Added
+- **`cast doctor` reports overlay freshness.** When the overlay log exists, a new `Overlay:` line warns if no
+  successful sync is logged, or if the last one is older than `CAST_OVERLAY_MAX_AGE_HOURS` (default 72). It shows the
+  newest error with non-printable characters replaced by `?`, cut to 120 characters.
+
 ## [10.6.1] — 2026-10-15
 
 ### Fixed

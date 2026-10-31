@@ -11,11 +11,19 @@ writes one review_gate_decisions row (would_block = what enforcement WOULD have 
 false-positive rate can be measured before enforcement is switched on.
 
 Per staged path (first match wins):
-  derived     CAST repo only: under plugin/ or == cast-stats.json (generated, not reviewable)
-  blocked     a file-scoped BLOCKED row (any reviewer) binds this exact (path, blob); or a
+  derived     CAST repo only: under plugin/ or == cast-stats.json (generated, not reviewable).
+              "CAST repo" = the two marker files AND the repo's root commit is CAST_ROOT_COMMIT
+              (F3; evaluated lazily, any git failure -> not CAST -> exemption off)
+  blocked     an UNCLEARED file-scoped BLOCKED row binds this exact (path, blob); or a
               repo-wide block (scope='repo' row / review-unrecorded marker under this repo)
-              not cleared by a LATER file-scoped review
-  approved    a code-reviewer APPROVE binds this exact (path, blob). Security APPROVE never counts.
+              not cleared by a LATER file-scoped review. A file-scoped BLOCK by reviewer type T is
+              cleared iff a file-scoped APPROVE by the SAME type T on the same (path, blob) has
+              started_at strictly later than the BLOCK's ended_at (latest same-type wins; epochs
+              compared; unparseable/NULL timestamps -> not cleared). A security BLOCK is never
+              cleared by a code-reviewer APPROVE and vice versa.
+  approved    a code-reviewer APPROVE binds this exact (path, blob) AND its recorded git file mode
+              equals the staged index mode (F2; a NULL mode never approves; deletions skip the mode
+              check). Security APPROVE never counts.
   hatched     would be unreviewed, but CAST_UNREVIEWED_OK is set (never turns blocked -> hatched)
   unreviewed  everything else, including: unstaged changes on the path, unreadable file, DB
               unavailable (fail closed in the CATEGORY; the exit code is still 0)
@@ -23,6 +31,10 @@ Per staged path (first match wins):
 Trust/robustness: git is reached only through cast_git_safe (via cast_review_snapshot._git); the
 DB is read with mode=ro and written with mode=rw (a missing DB is never created); markers are
 read-only (never deleted); the whole run is bounded (~20 s) and wrapped so it cannot crash.
+
+Library entry: evaluate(root, *, db_path, home, hatch, budget_s) -> dict is the in-process entry
+used by the PreToolUse git guard. It never raises and returns results/counts/would_block/db_ok/error;
+`hatch` (a reason string) replaces the CAST_UNREVIEWED_OK env read. run() is the CLI wrapper.
 
 Python 3.9 compatible, stdlib only.
 """
@@ -50,7 +62,9 @@ MAX_DISPLAY = 120
 MAX_GITLINKS = 200  # more index gitlinks than this -> gitlink-unknown (per-link rev-parse is a spawn each)
 MAX_BYTES = 50 * 1024 * 1024  # same total-size cap as take_snapshot
 DB_TIMEOUT_S = 3.0
+MAX_FUTURE_S = 300.0  # an APPROVE starting further ahead than this cannot clear a BLOCK
 SCRIPT_NAME = "cast-review-gate.py"
+CAST_ROOT_COMMIT = "6e91a7b35815811aee513bc038697c8dd85a4663"  # CAST's root commit (F3 repo identity)
 
 _SCRIPTS_DIR = os.path.dirname(os.path.realpath(__file__))
 _CRS = None  # cast_review_snapshot module, loaded lazily
@@ -168,8 +182,9 @@ class Store:
         _log_error(f"db query failed: {self.err}")
 
     def has_file_row(self, repo_root: str, key: str, blob: str, decision: str,
-                     reviewer: Optional[str] = None) -> bool:
-        """Any file-scoped row of `decision` (optionally by `reviewer`) binding (key, blob)?"""
+                     reviewer: Optional[str] = None, mode: Optional[str] = None) -> bool:
+        """Any file-scoped row of `decision` (optionally by `reviewer`, optionally recorded with
+        git file `mode`; a NULL recorded mode never matches) binding (key, blob)?"""
         if not self.ok or self._conn is None:
             return False
         sql = ("SELECT 1 FROM review_snapshots s JOIN review_snapshot_files f ON f.snapshot_id = s.id "
@@ -178,11 +193,47 @@ class Store:
         if reviewer is not None:
             sql += " AND s.reviewer = ?"
             params.append(reviewer)
+        if mode is not None:
+            sql += " AND f.mode = ?"
+            params.append(mode)
         try:
             return self._conn.execute(sql + " LIMIT 1", params).fetchone() is not None
         except sqlite3.Error as exc:
             self._fail(exc)
             return False
+
+    def uncleared_block(self, repo_root: str, key: str, blob: str) -> bool:
+        """True iff a file-scoped BLOCKED row on (key, blob) is not cleared. A BLOCK by reviewer
+        type T is cleared iff a file-scoped APPROVE by the same T on the same (key, blob) has
+        started_at strictly later than the BLOCK's ended_at (epochs; unparseable/NULL -> not
+        cleared). On DB error: .ok goes False and this returns False (path -> db-unavailable)."""
+        if not self.ok or self._conn is None:
+            return False
+        base = ("SELECT s.reviewer, s.{col}{extra} FROM review_snapshots s JOIN review_snapshot_files f "
+                "ON f.snapshot_id = s.id WHERE s.decision = ? AND s.scope = 'files' "
+                "AND s.repo_root = ? AND f.path = ? AND f.blob = ?")
+        try:
+            blocks = self._conn.execute(base.format(col="ended_at", extra=""), ("BLOCKED", repo_root, key, blob)).fetchall()
+            if not blocks:
+                return False
+            approves = self._conn.execute(base.format(col="started_at", extra=", s.ended_at"), ("APPROVE", repo_root, key, blob)).fetchall()
+        except sqlite3.Error as exc:
+            self._fail(exc)
+            return False
+        starts = {}  # type: Dict[str, List[float]]
+        now = time.time()
+        for reviewer, started, stopped in approves:
+            ep, stop_ep = _to_epoch(started), _to_epoch(stopped)
+            # an APPROVE whose clock is implausible cannot clear a BLOCK: unparseable own ended_at,
+            # started after it ended, or starting more than MAX_FUTURE_S in the future
+            if ep is None or stop_ep is None or ep > stop_ep or ep > now + MAX_FUTURE_S:
+                continue
+            starts.setdefault(reviewer, []).append(ep)
+        for reviewer, ended in blocks:
+            b = _to_epoch(ended)
+            if b is None or not any(a > b for a in starts.get(reviewer, [])):
+                return True
+        return False
 
     def degraded_block_ended_ats(self, repo_root: str) -> Optional[List[Optional[str]]]:
         """ended_at of every scope='repo' BLOCKED row at/under repo_root. None on DB error."""
@@ -212,9 +263,9 @@ class Store:
         return max(eps) if eps else None
 
 
-def read_markers(repo_root: str) -> List[Optional[str]]:
+def read_markers(repo_root: str, home: str) -> List[Optional[str]]:
     """ts of every valid review-unrecorded marker at/under repo_root (None = unparseable ts)."""
-    base = os.path.join(os.path.expanduser("~"), ".claude", "cast-state", "review-unrecorded")
+    base = os.path.join(home, ".claude", "cast-state", "review-unrecorded")
     out = []  # type: List[Optional[str]]
     try:
         names = sorted(os.listdir(base))
@@ -242,12 +293,12 @@ def read_markers(repo_root: str) -> List[Optional[str]]:
     return out
 
 
-def repo_wide_blocked(store: Store, repo_root: str) -> bool:
+def repo_wide_blocked(store: Store, repo_root: str, home: str) -> bool:
     """True iff a scope='repo' BLOCK row or unrecorded marker is not cleared by a LATER review."""
     degraded = store.degraded_block_ended_ats(repo_root)
     if degraded is None:
         degraded = []
-    items = list(degraded) + read_markers(repo_root)
+    items = list(degraded) + read_markers(repo_root, home)
     if not items:
         return False
     latest = store.latest_file_review_epoch(repo_root)
@@ -398,15 +449,27 @@ def hash_worktree(crs, root: str, rels: List[str], end: float):
     return result
 
 
-def is_cast_repo(root: str) -> bool:
-    # NOTE: identity here is file presence only -- a repo that plants these two files is treated
-    # as the CAST repo. A stronger identity (U4) is deliberately out of scope for this unit; the
-    # exemption is also applied AFTER block checks, so it can never override a recorded BLOCK.
-    for rel in ("agents/core/commit.md", "scripts/cast_review_snapshot.py"):
-        p = os.path.join(root, rel)
-        if os.path.islink(p) or not os.path.isfile(p):
+def is_cast_repo(root: str, end: float) -> bool:
+    """CAST identity: the two marker files AND CAST_ROOT_COMMIT among the repo's root commits.
+
+    F3 proves "this repo's history descends from CAST's root commit", NOT "this is CAST": a repo
+    that fetches CAST history passes. That is accepted -- the exemption is applied AFTER block
+    checks, so it can never override a recorded BLOCK, and pre-commit's drift check still runs.
+    A shallow clone has no visible root commit, so it fails closed (exemption off), as does any
+    git failure. Grafts/replace refs cannot forge the root: cast_git_safe passes
+    --no-replace-objects on every call (verified in scripts/cast-hook-lib.sh), so no extra flag
+    is needed here."""
+    try:
+        for rel in ("agents/core/commit.md", "scripts/cast_review_snapshot.py"):
+            p = os.path.join(root, rel)
+            if os.path.islink(p) or not os.path.isfile(p):
+                return False
+        res = _load_crs()._git(root, ["rev-list", "--max-parents=0", "HEAD"], _t(end))
+        if res is None or res.returncode != 0:
             return False
-    return True
+        return CAST_ROOT_COMMIT in res.stdout.split()
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------------- core
@@ -416,7 +479,7 @@ def _bad_path(path: str) -> bool:
 
 
 def classify(crs, root: str, staged: List[Tuple[str, str, str, str]],
-             unstaged: Optional[Set[str]], store: Store, end: float):
+             unstaged: Optional[Set[str]], store: Store, end: float, home: str):
     """-> list of (path, category, reason) in staged order.
 
     PRECEDENCE (one unconditional rule): (a) bad-path/budget -> (b) BLOCK sources (file row,
@@ -425,7 +488,13 @@ def classify(crs, root: str, staged: List[Tuple[str, str, str, str]],
     -> (c) derived -> (d) DB unavailable => unreviewed -> (e) index/worktree/type checks + approval.
     Derived never returns before (b).
     """
-    cast_repo = is_cast_repo(root)
+    cast_cache = []  # type: List[bool]
+
+    def cast_repo() -> bool:  # lazy: the git spawn is only paid when a derived-shaped path is staged
+        if not cast_cache:
+            cast_cache.append(is_cast_repo(root, end))
+        return cast_cache[0]
+
     verdicts = {}  # type: Dict[int, Tuple[str, str]]
     pending = []  # type: List[int]
     repo_block = None  # type: Optional[bool]
@@ -439,26 +508,26 @@ def classify(crs, root: str, staged: List[Tuple[str, str, str, str]],
         if status == "G":
             # a gitlink has no blob to bind: only the repo-wide BLOCK sources apply to it
             if repo_block is None:
-                repo_block = repo_wide_blocked(store, root)
+                repo_block = repo_wide_blocked(store, root, home)
             verdicts[idx] = ("blocked", "repo-wide-block") if repo_block else ("unreviewed", sblob)
             continue
         key = crs.path_key(path)
         bound = crs.DELETED if status == "D" else sblob  # the content that would be committed
-        if store.has_file_row(root, key, bound, "BLOCKED"):
+        if store.uncleared_block(root, key, bound):
             verdicts[idx] = ("blocked", "recorded-block")
             continue
         if repo_block is None:
-            repo_block = repo_wide_blocked(store, root)
+            repo_block = repo_wide_blocked(store, root, home)
         if repo_block:
             verdicts[idx] = ("blocked", "repo-wide-block")
-        elif cast_repo and (path.startswith("plugin/") or path == "cast-stats.json"):
+        elif (path.startswith("plugin/") or path == "cast-stats.json") and cast_repo():
             verdicts[idx] = ("derived", "generated-file")
         elif not store.ok:
             verdicts[idx] = ("unreviewed", "db-unavailable")
         elif unstaged is None:
             verdicts[idx] = ("unreviewed", "unstaged-unknown")
         elif status == "D":
-            verdicts[idx] = _approval(store, root, key, crs.DELETED)
+            verdicts[idx] = _approval(store, root, key, crs.DELETED, None)
         elif path in unstaged:
             verdicts[idx] = ("unreviewed", "unstaged-changes")
         elif mode not in ("120000", "100644", "100755"):
@@ -476,12 +545,14 @@ def classify(crs, root: str, staged: List[Tuple[str, str, str, str]],
         elif blob != sblob:
             verdicts[idx] = ("unreviewed", "index-worktree-mismatch")
         else:
-            verdicts[idx] = _approval(store, root, crs.path_key(path), blob)
+            verdicts[idx] = _approval(store, root, crs.path_key(path), blob, mode)
     return [(staged[i][1], verdicts[i][0], verdicts[i][1]) for i in range(len(staged))]
 
 
-def _approval(store: Store, root: str, key: str, blob: str) -> Tuple[str, str]:
-    if store.has_file_row(root, key, blob, "APPROVE", "code-reviewer"):
+def _approval(store: Store, root: str, key: str, blob: str, mode: Optional[str]) -> Tuple[str, str]:
+    """mode=None (staged deletion) skips the mode check; otherwise the APPROVE row's recorded mode
+    must equal the staged index mode (NULL never matches)."""
+    if store.has_file_row(root, key, blob, "APPROVE", "code-reviewer", mode):
         return ("approved", "code-reviewer-approve")
     return ("unreviewed", "db-error" if not store.ok else "no-approval")
 
@@ -517,7 +588,8 @@ def build_reasons(results: List[Tuple[str, str, str]]) -> str:
     return json.dumps(out)
 
 
-def write_row(db_path: str, row: dict, timeout: float = DB_TIMEOUT_S) -> bool:
+def write_row(db_path: str, row: dict, timeout: float = DB_TIMEOUT_S,
+              mode: str = "warn", source: str = "cli") -> bool:
     """INSERT one review_gate_decisions row. mode=rw never creates a missing DB."""
     conn = None
     try:
@@ -526,10 +598,10 @@ def write_row(db_path: str, row: dict, timeout: float = DB_TIMEOUT_S) -> bool:
         conn.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
         with conn:
             conn.execute(
-                "INSERT INTO review_gate_decisions (session_id, repo_root, mode, would_block, n_staged, n_approved, n_unreviewed, n_blocked, n_derived, n_hatched, reasons) VALUES (?, ?, 'warn', ?, ?, ?, ?, ?, ?, ?, ?)",
-                (row["session_id"], row["repo_root"], row["would_block"], row["n_staged"],
+                "INSERT INTO review_gate_decisions (session_id, repo_root, mode, would_block, n_staged, n_approved, n_unreviewed, n_blocked, n_derived, n_hatched, reasons, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (row["session_id"], row["repo_root"], mode, row["would_block"], row["n_staged"],
                  row["n_approved"], row["n_unreviewed"], row["n_blocked"], row["n_derived"],
-                 row["n_hatched"], row["reasons"]),
+                 row["n_hatched"], row["reasons"], source),
             )
         return True
     except sqlite3.Error as exc:
@@ -543,45 +615,100 @@ def write_row(db_path: str, row: dict, timeout: float = DB_TIMEOUT_S) -> bool:
                 pass
 
 
+_CATS = ("approved", "unreviewed", "blocked", "derived", "hatched")
+
+
+def evaluate(root: str, *, db_path: str, home: str, hatch: str, budget_s: float,
+             audit_hatch: bool = True) -> dict:
+    """In-process library entry. Never raises.
+
+    -> {results: [(path, category, reason)], counts, would_block (0/1), db_ok, error, root, staged}
+    error is None or one of "not-a-repo", "diff-failed", "budget", "db-unavailable",
+    "exception:<Name>". `hatch` (non-empty) turns "unreviewed" into "hatched" (never "blocked")
+    and is audited via record_hatch(). Staged paths are categorised even when the DB fails.
+
+    audit_hatch=False skips the record_hatch() ack spawn (up to 3 s) for callers under a tight hook
+    timeout; the unreviewed -> hatched conversion still happens and the caller records the hatch.
+
+    CONTRACT: error is not None and error != "not-a-repo"  =>  would_block == 1 (fail closed; a
+    caller that cannot trust the evaluation must treat it as would-block). On an exception after
+    classification the partial (pre-hatch) results are kept and would_block is forced to 1.
+    """
+    out = {"results": [], "counts": {c: 0 for c in _CATS}, "would_block": 0, "db_ok": False,
+           "error": None, "root": root, "staged": False}  # type: dict
+    store = None
+    try:
+        end = time.monotonic() + budget_s
+        crs = _load_crs()
+        top = crs._git(root, ["rev-parse", "--show-toplevel"], _t(end))
+        if top is None or top.returncode != 0 or not top.stdout.strip("\n"):
+            out["error"] = "not-a-repo"
+            return out
+        root = os.path.realpath(top.stdout.strip("\n"))
+        out["root"] = root
+        staged = staged_entries(crs, root, _t(end))
+        if staged is None:
+            _log_error("git diff --cached failed")
+            out["error"] = "diff-failed"
+            return out
+        staged = staged + gitlink_entries(crs, root, {e[1] for e in staged}, end)
+        if not staged:
+            return out
+        out["staged"] = True
+        unstaged = unstaged_set(crs, root, _t(end))
+        store = Store(db_path, min(DB_TIMEOUT_S, max(0.1, end - time.monotonic())))
+        results = classify(crs, root, staged, unstaged, store, end, home)
+        out["db_ok"] = store.ok
+        counts = {c: 0 for c in _CATS}
+        for _, cat, _ in results:
+            counts[cat] += 1
+        out.update(results=results, counts=counts,
+                   would_block=1 if (counts["unreviewed"] or counts["blocked"]) else 0)
+        if any(r == "budget" for _, _, r in results):
+            out["error"] = "budget"
+        elif not store.ok:
+            out["error"] = "db-unavailable"
+        if hatch:
+            hatched = [(p, "hatched", r) if c == "unreviewed" else (p, c, r) for p, c, r in results]
+            if audit_hatch and any(c == "hatched" for _, c, _ in hatched):
+                record_hatch(hatch)  # may raise: partial pre-hatch results + would_block=1 stand
+            hcounts = {c: 0 for c in _CATS}
+            for _, cat, _ in hatched:
+                hcounts[cat] += 1
+            out.update(results=hatched, counts=hcounts,
+                       would_block=1 if (hcounts["unreviewed"] or hcounts["blocked"]) else 0)
+    except Exception as exc:
+        _log_error(f"evaluate {type(exc).__name__}: {exc}")
+        out["error"] = f"exception:{type(exc).__name__}"
+    finally:
+        if store is not None:
+            store.close()
+        if out["error"] is not None and out["error"] != "not-a-repo":
+            out["would_block"] = 1
+    return out
+
+
 def run() -> None:
     end = time.monotonic() + BUDGET_S
     crs = _load_crs()
-    cwd = os.getcwd()
-    top = crs._git(cwd, ["rev-parse", "--show-toplevel"], _t(end))
-    if top is None or top.returncode != 0 or not top.stdout.strip("\n"):
+    db_path = crs.default_db_path()
+    ev = evaluate(os.getcwd(), db_path=db_path, home=os.path.expanduser("~"),
+                  hatch=os.environ.get("CAST_UNREVIEWED_OK", ""), budget_s=BUDGET_S)
+    err = ev["error"]
+    if err == "not-a-repo":
         _emit("review-gate: skipped (not a git repo)")
         return
-    root = os.path.realpath(top.stdout.strip("\n"))
-
-    staged = staged_entries(crs, root, _t(end))
-    if staged is None:
-        _log_error("git diff --cached failed")
+    if err == "diff-failed":
         _emit("review-gate: error (git diff --cached failed)")
         return
-    staged = staged + gitlink_entries(crs, root, {e[1] for e in staged}, end)
-    if not staged:
+    if err is not None and err.startswith("exception:"):
+        _emit(f"review-gate: error ({err[len('exception:'):]})")
+        return
+    if not ev["staged"]:
         _emit("review-gate: nothing staged")
         return
-    unstaged = unstaged_set(crs, root, _t(end))
-
-    db_path = crs.default_db_path()
-    store = Store(db_path, min(DB_TIMEOUT_S, max(0.1, end - time.monotonic())))
-    try:
-        results = classify(crs, root, staged, unstaged, store, end)
-        db_ok = store.ok
-    finally:
-        store.close()
-
-    hatch = os.environ.get("CAST_UNREVIEWED_OK", "")
-    if hatch:
-        results = [(p, "hatched", r) if c == "unreviewed" else (p, c, r) for p, c, r in results]
-        if any(c == "hatched" for _, c, _ in results):
-            record_hatch(hatch)
-
-    counts = {c: 0 for c in ("approved", "unreviewed", "blocked", "derived", "hatched")}
-    for _, cat, _ in results:
-        counts[cat] += 1
-    would_block = 1 if (counts["unreviewed"] or counts["blocked"]) else 0
+    results, counts, db_ok, root = ev["results"], ev["counts"], ev["db_ok"], ev["root"]
+    would_block = ev["would_block"]  # fail-closed: forced to 1 on any evaluate() error
 
     sid = os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CAST_SESSION_ID") or None
     row_ok = write_row(db_path, {
@@ -590,16 +717,20 @@ def run() -> None:
         "n_unreviewed": counts["unreviewed"], "n_blocked": counts["blocked"],
         "n_derived": counts["derived"], "n_hatched": counts["hatched"],
         "reasons": build_reasons(results),
-    }, min(DB_TIMEOUT_S, max(0.1, end - time.monotonic()))) if db_ok else False
+    }, min(DB_TIMEOUT_S, max(0.1, end - time.monotonic())), source="cli") if db_ok else False
 
-    summary = " ".join(f"{k}={counts[k]}" for k in ("approved", "unreviewed", "blocked", "derived", "hatched"))
+    summary = " ".join(f"{k}={counts[k]}" for k in _CATS)
     if would_block:
-        first = next(r for r in results if r[1] == "blocked") if counts["blocked"] else \
-            next(r for r in results if r[1] == "unreviewed")
-        line = (f"review-gate WARN (not enforced): would block — {summary}; "
-                f"first: {_display(first[0])} ({first[2]})")
+        line = f"review-gate WARN (not enforced): would block — {summary}"
+        # no blocked/unreviewed path exists when a hatch masked everything under an error
+        first = next((r for r in results if r[1] == "blocked"), None) or \
+            next((r for r in results if r[1] == "unreviewed"), None)
+        if first is not None:
+            line += f"; first: {_display(first[0])} ({first[2]})"
     else:
         line = f"review-gate OK: {summary}"
+    if err is not None:
+        line += f"; error={err}"
     if not db_ok:
         line += "; db unavailable, decision row not recorded"
     elif not row_ok:
