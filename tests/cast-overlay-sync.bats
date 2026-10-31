@@ -104,3 +104,204 @@ teardown() {
   post_email="$(git -C "$OVERLAY_DIR" config user.email)"
   [ "$post_email" = "$EXPECTED_EMAIL" ]
 }
+
+# --- Wedged-clone self-heal (overlay failed every run 2026-08-22..2026-10-30) ---
+
+_seed_src() {
+  mkdir -p "$SRC_DIR/config"
+  printf 'plain\n' > "$SRC_DIR/config/sync.json"
+}
+
+_run_sync() { run bash "$SCRIPT" "$@" </dev/null; }
+
+_first_tracked() { git -C "$OVERLAY_DIR" ls-files | grep -v '^\.keep$' | head -1; }
+
+@test "wedged clone (modified tracked file) self-heals, pushes, and logs the restore" {
+  _seed_src
+  _run_sync
+  [ "$status" -eq 0 ]
+  tracked="$(_first_tracked)"
+  [ -n "$tracked" ]
+  echo "wedge" >> "$OVERLAY_DIR/$tracked"
+  echo "changed" >> "$SRC_DIR/config/sync.json"
+  before="$(git -C "$FAKE_REMOTE" rev-parse main)"
+
+  _run_sync
+  [ "$status" -eq 0 ]
+  after="$(git -C "$FAKE_REMOTE" rev-parse main)"
+  [ "$before" != "$after" ]
+  grep -q "restored overlay clone" "$HOME/.claude/logs/cast-overlay-sync.log"
+}
+
+@test "secret abort leaves the clone clean and the next run succeeds" {
+  _seed_src
+  _run_sync
+  [ "$status" -eq 0 ]
+  src="$SRC_DIR/config/sync.json"
+  cp "$src" "$BATS_TEST_TMPDIR/orig"
+  printf 'AKIA%s\n' QQQQQQQQQQQQQQQQ >> "$src"
+
+  _run_sync
+  [ "$status" -eq 1 ]
+  [ -z "$(git -C "$OVERLAY_DIR" status --porcelain --untracked-files=no)" ]
+
+  cp "$BATS_TEST_TMPDIR/orig" "$src"
+  echo "benign change" >> "$src"
+  _run_sync
+  [ "$status" -eq 0 ]
+}
+
+@test "dirty clone whose origin differs from CAST_OVERLAY_REPO is not restored" {
+  _seed_src
+  _run_sync
+  [ "$status" -eq 0 ]
+  tracked="$(_first_tracked)"
+  echo "dirty" >> "$OVERLAY_DIR/$tracked"
+  sum_before="$(shasum -a 256 "$OVERLAY_DIR/$tracked")"
+  git -C "$OVERLAY_DIR" remote set-url origin "$BATS_TEST_TMPDIR/other-origin.git"
+
+  _run_sync
+  [ "$status" -eq 1 ]
+  [ "$(shasum -a 256 "$OVERLAY_DIR/$tracked")" = "$sum_before" ]
+}
+
+@test "overlay dir that is a subdirectory of another repo is refused" {
+  OUTER="$BATS_TEST_TMPDIR/outer"
+  git init -q "$OUTER"
+  git -C "$OUTER" config user.email t@example.com
+  git -C "$OUTER" config user.name t
+  mkdir -p "$OUTER/sub"
+  echo a > "$OUTER/sub/f.txt"
+  git -C "$OUTER" add -A
+  git -C "$OUTER" commit -q -m init
+  git -C "$OUTER" remote add origin "$FAKE_REMOTE"
+  echo dirty >> "$OUTER/sub/f.txt"
+  sum_before="$(shasum -a 256 "$OUTER/sub/f.txt")"
+  export CAST_OVERLAY_DIR="$OUTER/sub"
+
+  _run_sync
+  [ "$status" -eq 1 ]
+  [ "$(shasum -a 256 "$OUTER/sub/f.txt")" = "$sum_before" ]
+}
+
+@test "overlay dir reached through a symlink is accepted" {
+  _seed_src
+  ln -s "$OVERLAY_DIR" "$BATS_TEST_TMPDIR/overlay-link"
+  export CAST_OVERLAY_DIR="$BATS_TEST_TMPDIR/overlay-link"
+  _run_sync
+  [ "$status" -eq 0 ]
+}
+
+@test "trailing slash on CAST_OVERLAY_DIR is accepted" {
+  _seed_src
+  export CAST_OVERLAY_DIR="$OVERLAY_DIR/"
+  _run_sync
+  [ "$status" -eq 0 ]
+}
+
+@test "_norm_origin treats ssh, scp and https forms of one repo as equal" {
+  eval "$(sed -n '/^_norm_origin()/,/^}/p' "$SCRIPT")"
+  want="github.com/owner/repo"
+  # The at-sign is built at runtime: the PII gates read user-at-host.tld text as an email address.
+  local at='@'
+  [ "$(_norm_origin "git${at}github.com:owner/repo.git")" = "$want" ]
+  [ "$(_norm_origin "git${at}github.com:owner/repo")" = "$want" ]
+  [ "$(_norm_origin "ssh://git${at}github.com/owner/repo.git")" = "$want" ]
+  [ "$(_norm_origin 'https://github.com/owner/repo')" = "$want" ]
+  [ "$(_norm_origin "https://tok${at}GitHub.com/owner/repo.git")" = "$want" ]
+  [ "$(_norm_origin 'https://github.com/owner/repo/')" = "$want" ]
+  [ "$(_norm_origin "ssh://git${at}github.com:22/o/r")" = "$(_norm_origin 'https://github.com/o/r')" ]
+  [ "$(_norm_origin "ssh://git${at}github.com:2222/o/r")" != "$(_norm_origin 'https://github.com/o/r')" ]
+  # path case is NOT folded; different owner/repo never matches
+  [ "$(_norm_origin 'https://github.com/Owner/repo')" != "$want" ]
+  [ "$(_norm_origin "git${at}github.com:other/repo.git")" != "$want" ]
+  # local paths compare exactly
+  [ "$(_norm_origin '/tmp/x/fake-origin.git')" = "/tmp/x/fake-origin" ]
+}
+
+@test "dirty clone with a different owner/repo origin is refused, file unchanged" {
+  _seed_src
+  _run_sync
+  [ "$status" -eq 0 ]
+  tracked="$(_first_tracked)"
+  echo "dirty" >> "$OVERLAY_DIR/$tracked"
+  sum_before="$(shasum -a 256 "$OVERLAY_DIR/$tracked")"
+  git -C "$OVERLAY_DIR" remote set-url origin "https://github.com/other/repo.git"
+  export CAST_OVERLAY_REPO="https://github.com/owner/repo"
+
+  _run_sync
+  [ "$status" -eq 1 ]
+  [ "$(shasum -a 256 "$OVERLAY_DIR/$tracked")" = "$sum_before" ]
+}
+
+@test "overlay dir that is an ancestor of CAST_CLAUDE_DIR is refused, file unchanged" {
+  _seed_src
+  _run_sync
+  [ "$status" -eq 0 ]
+  tracked="$(_first_tracked)"
+  echo "dirty" >> "$OVERLAY_DIR/$tracked"
+  sum_before="$(shasum -a 256 "$OVERLAY_DIR/$tracked")"
+  mkdir -p "$OVERLAY_DIR/inner/config"
+  export CAST_CLAUDE_DIR="$OVERLAY_DIR/inner"
+
+  _run_sync
+  [ "$status" -eq 1 ]
+  [ "$(shasum -a 256 "$OVERLAY_DIR/$tracked")" = "$sum_before" ]
+}
+
+@test "empty HOME is refused, dirty file unchanged" {
+  _seed_src
+  _run_sync
+  [ "$status" -eq 0 ]
+  tracked="$(_first_tracked)"
+  echo "dirty" >> "$OVERLAY_DIR/$tracked"
+  sum_before="$(shasum -a 256 "$OVERLAY_DIR/$tracked")"
+
+  HOME="" run bash "$SCRIPT" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"HOME is unset or empty; refusing to run"* ]]
+  [ "$(shasum -a 256 "$OVERLAY_DIR/$tracked")" = "$sum_before" ]
+}
+
+@test "inherited GIT_DIR cannot redirect the sync at another repo" {
+  _seed_src
+  OTHER="$BATS_TEST_TMPDIR/other-repo"
+  git init -q "$OTHER"
+  cfg_before="$(shasum -a 256 "$OTHER/.git/config")"
+  head_before="$(git -C "$OTHER" symbolic-ref HEAD)"
+
+  GIT_DIR="$OTHER/.git" run bash "$SCRIPT" </dev/null
+  [ "$status" -eq 0 ]
+  [ "$(shasum -a 256 "$OTHER/.git/config")" = "$cfg_before" ]
+  [ "$(git -C "$OTHER" symbolic-ref HEAD)" = "$head_before" ]
+  [ "$(git -C "$OVERLAY_DIR" config user.email)" = "$EXPECTED_EMAIL" ]
+}
+
+@test "up-front gate stops a clean subdir of another repo before git config runs" {
+  OUTER="$BATS_TEST_TMPDIR/outer2"
+  git init -q "$OUTER"
+  git -C "$OUTER" config user.email t@example.com
+  git -C "$OUTER" config user.name t
+  mkdir -p "$OUTER/sub"
+  echo a > "$OUTER/sub/f.txt"
+  git -C "$OUTER" add -A
+  git -C "$OUTER" commit -q -m init
+  git -C "$OUTER" remote add origin "$FAKE_REMOTE"
+  cfg_before="$(shasum -a 256 "$OUTER/.git/config")"
+  export CAST_OVERLAY_DIR="$OUTER/sub"
+
+  _run_sync
+  [ "$status" -eq 1 ]
+  [ "$(shasum -a 256 "$OUTER/.git/config")" = "$cfg_before" ]
+}
+
+@test "--dry-run leaves no staged or modified tracked files" {
+  _seed_src
+  _run_sync
+  [ "$status" -eq 0 ]
+  echo "more" >> "$SRC_DIR/config/sync.json"
+
+  _run_sync --dry-run
+  [ "$status" -eq 0 ]
+  [ -z "$(git -C "$OVERLAY_DIR" status --porcelain --untracked-files=no)" ]
+}

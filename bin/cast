@@ -3499,6 +3499,49 @@ except Exception:
     fi
   fi
 
+  # Overlay sync freshness (opt-in off-machine DR; silent when the log is absent).
+  # Added after the overlay failed 149/149 runs for 70 days without any alarm.
+  local overlay_log="${HOME}/.claude/logs/cast-overlay-sync.log"
+  if [[ -f "$overlay_log" ]]; then
+    local overlay_max_age_hours="${CAST_OVERLAY_MAX_AGE_HOURS:-72}"
+    [[ "$overlay_max_age_hours" =~ ^(0|[1-9][0-9]{0,6})$ ]] || overlay_max_age_hours=72
+    local overlay_probe overlay_age overlay_err
+    overlay_probe="$(python3 -I -c 'import sys,time,calendar,re
+age=-1; err=""
+try:
+    with open(sys.argv[1], errors="replace", newline="\n") as f:
+        for line in f:
+            try:
+                if "] [info] Overlay sync complete" in line or "] [info] Nothing to commit" in line:
+                    m=re.match(r"\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\]", line)
+                    if m:
+                        t=calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%SZ"))
+                        now=time.time()
+                        if t > now+300:
+                            continue
+                        age=max(0, int((now-t)//3600))
+                elif "] [error] " in line:
+                    err=re.sub(r"[^\x20-\x7e]", "?", line.split("] [error] ",1)[1].strip())[:120]
+            except Exception:
+                continue
+except Exception:
+    pass
+print(age)
+print(err)' "$overlay_log" 2>/dev/null || printf '%s\n' "-1" "")"
+    overlay_age="$(printf '%s\n' "$overlay_probe" | sed -n '1p')"
+    overlay_err="$(printf '%s\n' "$overlay_probe" | sed -n '2p')"
+    [[ "$overlay_age" =~ ^-?[0-9]+$ ]] || overlay_age=-1
+    if [[ "$overlay_age" -ge 0 && "$overlay_age" -le "$overlay_max_age_hours" ]]; then
+      printf "%b Overlay: last sync %sh ago\n" "$OK" "$overlay_age"
+    else
+      local overlay_age_txt="${overlay_age}h ago"
+      [[ "$overlay_age" -lt 0 ]] && overlay_age_txt="never"
+      printf "%b Overlay: last successful sync %s (threshold %sh); last error: %s\n" \
+        "$WARN" "$overlay_age_txt" "$overlay_max_age_hours" "${overlay_err:-none logged}"
+      overall_ok=0
+    fi
+  fi
+
   # Litestream replica freshness (opt-in continuous replication outside blast radius)
   local _ls_root="${CAST_LITESTREAM_ROOT:-${HOME}/Library/Application Support/cast}"
   local _ls_config="${_ls_root}/litestream.yml"

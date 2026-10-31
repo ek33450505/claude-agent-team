@@ -22,10 +22,22 @@ set -euo pipefail
 # Guard: do not run recursively inside CAST subprocess chains
 [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]] && exit 0
 
+# Guard: every path below derives from HOME (log file, clone dir, source dir).
+# Cannot log here: the log path itself depends on HOME.
+if [[ -z "${HOME:-}" ]]; then
+  echo "cast-overlay-sync: HOME is unset or empty; refusing to run" >&2
+  exit 1
+fi
+
+# An inherited git environment must not redirect any git call below.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
 # ============================================================================
 # Configuration
 # ============================================================================
 
+# Must be a URL or an ABSOLUTE local path: git stores a clone's origin resolved,
+# so a relative path would never match the identity gate (_overlay_verify_identity).
 CAST_OVERLAY_REPO="${CAST_OVERLAY_REPO:-}"
 
 # If CAST_OVERLAY_REPO is not set via env, try reading from local config file (gitignored)
@@ -196,6 +208,75 @@ fi
 
 cd "$CAST_OVERLAY_DIR"
 
+# _norm_origin — reduce a git remote URL to a comparable form. https (with or
+# without userinfo), ssh:// and scp-style (git@host:owner/repo) remotes all
+# become host/owner/repo with a lowercased host; trailing slash and .git are
+# dropped. Anything else (e.g. a local path) is compared exactly.
+_norm_origin() {
+  local u="$1" host path
+  local re_ssh='^ssh://([^/@]*@)?([^/:]+)(:[0-9]+)?/(.+)$'
+  local re_https='^https://([^/@]*@)?([^/]+)/(.+)$'
+  local re_scp='^[^/@:]+@([^/:]+):(.+)$'
+  while [[ "$u" == */ ]]; do u="${u%/}"; done
+  u="${u%.git}"
+  if [[ "$u" =~ $re_ssh ]]; then
+    host="${BASH_REMATCH[2]}"
+    # Keep a non-default ssh port in the identity; :22 is the default.
+    if [[ -n "${BASH_REMATCH[3]}" && "${BASH_REMATCH[3]}" != ":22" ]]; then
+      host="${host}${BASH_REMATCH[3]}"
+    fi
+    path="${BASH_REMATCH[4]}"
+  elif [[ "$u" =~ $re_https ]]; then
+    host="${BASH_REMATCH[2]}"
+    path="${BASH_REMATCH[3]}"
+  elif [[ "$u" =~ $re_scp ]]; then
+    host="${BASH_REMATCH[1]}"
+    path="${BASH_REMATCH[2]}"
+  else
+    printf '%s' "$u"
+    return 0
+  fi
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  printf '%s/%s' "$host" "$path"
+}
+
+# _overlay_verify_identity — the cwd must be the root of its own git repo
+# (not a subdirectory of some other repo) and its origin must be
+# CAST_OVERLAY_REPO. Shared by the up-front gate and _overlay_restore_head.
+# Logs and returns non-zero on any mismatch; never modifies anything.
+_overlay_verify_identity() {
+  local dir_real top top_real origin want have
+  if [[ -z "${HOME:-}" ]]; then
+    error "identity check refused: HOME is unset or empty"
+    return 1
+  fi
+  dir_real="$(cd -P "$CAST_OVERLAY_DIR" 2>/dev/null && pwd -P)" || dir_real=""
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+  top_real=""
+  if [[ -n "$top" ]]; then
+    top_real="$(cd -P "$top" 2>/dev/null && pwd -P)" || top_real=""
+  fi
+  if [[ -z "$dir_real" || -z "$top_real" || "$dir_real" != "$top_real" ]]; then
+    error "identity check failed: $CAST_OVERLAY_DIR is not the root of its own git repo"
+    return 1
+  fi
+  origin="$(git remote get-url origin 2>/dev/null)" || origin=""
+  want="$(_norm_origin "$CAST_OVERLAY_REPO")"
+  have="$(_norm_origin "$origin")"
+  if [[ -z "$have" || "$have" != "$want" ]]; then
+    error "identity check failed: origin URL does not match CAST_OVERLAY_REPO"
+    return 1
+  fi
+  return 0
+}
+
+# Up-front gate: nothing below (git config, pull, add, commit, push) may touch
+# a directory that is not verifiably the overlay clone.
+if ! _overlay_verify_identity; then
+  error "overlay dir $CAST_OVERLAY_DIR is not the overlay clone; refusing to run"
+  exit 1
+fi
+
 # Set local git identity on every run (repo-local config only — never global).
 # Root cause (confirmed 2026-07-09): GitHub's push-protection rejects commits
 # authored with a real email address ("GH007: Your push would publish a
@@ -206,6 +287,47 @@ cd "$CAST_OVERLAY_DIR"
 # any commit happens below.
 git config user.email "97137083+ek33450505@users.noreply.github.com"
 git config user.name "Edward Kubiak"
+
+# _overlay_restore_head — discard tracked changes in the overlay clone.
+# Destructive (git reset --hard), so it is fail-closed: it runs ONLY when the
+# clone is verifiably the overlay repo root. The clone is a pure mirror (every
+# run re-copies every file from CAST_CLAUDE_DIR), so nothing is lost. Never
+# runs `git clean`: untracked files stay. Returns non-zero (after logging)
+# when any gate fails; the caller decides how to exit.
+_overlay_restore_head() {
+  local dir_real claude_real home_real n
+  if ! _overlay_verify_identity; then
+    error "restore refused: overlay identity not verified"
+    return 1
+  fi
+
+  dir_real="$(cd -P "$CAST_OVERLAY_DIR" 2>/dev/null && pwd -P)" || dir_real=""
+  claude_real="$(cd -P "$CAST_CLAUDE_DIR" 2>/dev/null && pwd -P)" || claude_real="$CAST_CLAUDE_DIR"
+  home_real="$(cd -P "$HOME" 2>/dev/null && pwd -P)" || home_real="$HOME"
+  if [[ -z "$dir_real" || "$dir_real" == "/" || "$dir_real" == "$home_real" || "$dir_real" == "$claude_real" ||
+        "$claude_real" == "$dir_real"/* ]]; then
+    error "restore refused: $dir_real is /, \$HOME, or contains/equals CAST_CLAUDE_DIR"
+    return 1
+  fi
+
+  n="$(git status --porcelain --untracked-files=no | wc -l | tr -d ' ')"
+  if ! git reset --hard HEAD >>"$LOG_FILE" 2>&1; then
+    error "git reset --hard HEAD failed"
+    return 1
+  fi
+  info "restored overlay clone to HEAD ($n tracked changes discarded; every file is re-copied from CAST_CLAUDE_DIR)"
+  return 0
+}
+
+# Self-heal: a previous aborted run (secret scan, dry-run) can leave tracked
+# files modified, which makes `git pull --rebase` fail forever (the overlay
+# was wedged 2026-08-22 .. 2026-10-30).
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+  if ! _overlay_restore_head; then
+    error "overlay clone has uncommitted changes and its identity could not be verified; not restoring"
+    exit 1
+  fi
+fi
 
 # Check if remote main branch exists; if not, just use local main
 if git ls-remote --exit-code --heads origin main &>/dev/null 2>&1; then
@@ -319,8 +441,7 @@ fi
 if _has_secret_content; then
   error "Secret patterns detected in staged files. Aborting commit."
   error "Review staged files and remove secrets before retrying:"
-  error "  git diff --staged | grep -i secret"
-  git reset 2>&1 | tee -a "$LOG_FILE"
+  _overlay_restore_head || true
   exit 1
 fi
 
@@ -331,6 +452,7 @@ fi
 if [[ $DRY_RUN -eq 1 ]]; then
   info "DRY-RUN: showing git diff --stat"
   git diff --staged --stat 2>&1 | tee -a "$LOG_FILE"
+  _overlay_restore_head || true
   exit 0
 fi
 
