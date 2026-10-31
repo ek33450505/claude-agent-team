@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.7.0] — 2026-10-30
+
 **Upgrading:** run `bash install.sh`. It applies migration 039 (`cast-migrate.py --confirm`; `cast-db-init.sh` also
 self-heals the two new columns) and delivers the new commit-agent instructions, so commit dispatches change. After the
 upgrade the guard writes a decision row for each commit-agent commit that has a hook cwd and budget left, and

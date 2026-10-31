@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
-  <img src="https://img.shields.io/badge/version-10.6.1-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-10.7.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
   <img src="https://img.shields.io/badge/tests-4795-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
@@ -43,7 +43,7 @@ See [docs/known-limitations.md](docs/known-limitations.md).
 
 ```console
 $ cast status          # real layout; spend/memory values replaced with illustrative ones
-CAST v10.6.1
+CAST v10.7.0
 ======================================================================
 Agents      27 in ~/.claude/agents/
 Hooks       30 active
@@ -62,7 +62,7 @@ Recent agents (last 5):
 `+` is a clean `DONE`; `~` is still running; `x` is `BLOCKED` or `NEEDS_CONTEXT`. In-flight rows carry no
 model or elapsed time yet. Those are written at completion, so an empty pair means *running*, not *broken*.
 
-> **Status.** Latest release **v10.6.1** (2026-10-15). Released history: [CHANGELOG.md](CHANGELOG.md).
+> **Status.** Latest release **v10.7.0** (2026-10-30). Released history: [CHANGELOG.md](CHANGELOG.md).
 
 ## See it work
 
