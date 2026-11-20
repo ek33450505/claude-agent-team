@@ -4,6 +4,62 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+**Upgrading:** run `bash install.sh`. Every `managed-settings.d` fragment shipped in the repo is now overwritten on
+reinstall (a differing copy is backed up at mode 600), so hand edits to any shipped fragment (`00-env.json` through
+`61-sandbox.json`) are reverted; keep personal overrides in a fragment that sorts last, such as
+`90-personal-defaults.json`. The reinstall also removes the retired `cast-exec.sh`, the retired commands and skills,
+and the old `commands/doctor.md`. CAST's health-check command is now `/cast-doctor`; `/doctor` is Claude Code's own.
+
+### Fixed
+- **Cost reports counted resumed subagents more than once.** A `SendMessage`-resumed subagent keeps its `agent_id`,
+  and each leg gets its own `agent_runs` row, but every row stored the whole transcript's usage. Measured on a cast.db
+  copy since 2026-10-01: `SUM(cost_usd)` read $5,924 against $3,506 when each agent is counted once, so cost reports
+  and the budget check ran $2,418 (69%) above the true total. Each row now stores its own leg (the transcript total
+  minus the earlier legs' sums, clamped at 0). History is not rewritten, so cost figures recorded before this release
+  still carry the overcount. (#452)
+- **Task tools were missing for `/orchestrate`.** Claude Code 2.1.233/2.1.268 stopped offering TaskCreate, TaskUpdate,
+  TaskList and TodoWrite unless `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` is set; `managed-settings.d` now sets it. The no-op
+  `CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION` cap is dropped. (#452)
+- **Memory recall ran on slash-command prompts.** Since Claude Code 2.1.299 `UserPromptSubmit` receives the unexpanded
+  command text; the recall hook now skips command-shaped prompts. (#452)
+- **Repo settings fragment changes never reached the live machine.** install.sh skipped existing fragments and only
+  reported drift, so #452's env change never reached the live machine.
+- **Agents were told to dispatch agents they cannot reach.** backend-writer, frontend-writer, debugger,
+  bash-specialist, researcher, test-runner, release-notes, docs and commit instructed self-dispatch of code-reviewer,
+  commit, push, planner or debugger, which subagents cannot do (no Agent tool at the spawn depth, background agents,
+  a dispatcher-pinned index for commits). Read literally, `/orchestrate` then skipped the review gate. Agents now
+  report a `## Recommended Next Agents` section and stop, and `/orchestrate` Step 4 runs an explicit review gate
+  before a batch is marked complete. report-writer also loses its unused Agent tool. Found by Claude Code's
+  built-in prompt audit.
+- **Instruction files stated facts the repo contradicts**, among them researcher's knowledge cutoff, bash-specialist's
+  guard recipe (the guard is `cast-git-guard.py`, the live hook `cast-pretool-dispatch.py`), `/orchestrate`'s expired
+  2026-06-03 branch cutover (`target_branch` is now required), `/cast`'s agent count, skills `/morning` named that do
+  not exist, and two rules-core facts (agent model counts, BATS helper path).
+
+### Added
+- **`scripts/cast-otel-report.py`**, a read-only report over the stored OTel events: tool decisions by permission mode,
+  classifier verdict and decision; the 5-minute/1-hour cache-write split per day; hook output sizes and outputs
+  persisted to file; workflow cost by `workflow.run_id`. `--json` always emits valid JSON. Claude Code 2.1.311 exports
+  no `safety_event` on the logs pipeline here, so the report shows the reject count as a proxy.
+- **Model switches are recorded.** A `PostModelSwitch` hook writes a `model_switch` row to `routing_events` (from and
+  to model, source). It is async, fails open and never prints.
+- **Sessions are named after their handoff.** The resume-inject hook sets `sessionTitle` to `<repo>: <handoff>` when it
+  injects a hand-written handoff on a fresh startup; never on resume, clear or compact.
+
+### Changed
+- `commit` and `test-runner` run with `omitClaudeMd: true`; both carry their own safety rules.
+- `!` command output stays context-only (`respondToBashCommands: false`).
+- `/doctor` is renamed `/cast-doctor`. The `cast doctor` CLI is unchanged.
+- The SessionStart hook no longer carries dead OTel wiring; OTel is configured by `cast-otel.sh`. (#452)
+
+### Removed
+- `cast exec` (never used): `cast exec` now exits 2 and points at `/orchestrate`. The repo-wide no-`--bare` guard test
+  is kept as `tests/cast-no-bare.bats`.
+- Commands `/feature`, `/secure` and `/test`, and skills `careful-mode`, `freeze-mode` and `wizard`, which
+  `/skill-doctor` showed never used, and `ship` (one use in 151 days).
+- The `/laconic`, `/merge`, `/orchestrate` and `/plan` command wrappers, which duplicated same-name skills; the
+  skills stay invocable.
+
 ## [10.7.0] — 2026-10-30
 
 **Upgrading:** run `bash install.sh`. It applies migration 039 (`cast-migrate.py --confirm`; `cast-db-init.sh` also
