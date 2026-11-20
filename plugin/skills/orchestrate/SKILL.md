@@ -48,7 +48,7 @@ python3 ~/.claude/scripts/orchestrate-dispatch.py log-dispatch \
   --plan "$PLAN_FILE_PATH" --session-id "${CAST_SESSION_ID:-${CLAUDE_SESSION_ID:-}}" 2>/dev/null || true
 ```
 
-Create one TaskCreate entry per batch (subject = "Batch N: [description]").
+Create one TaskCreate entry per batch (subject = "Batch N: [description]"). The task tools need `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` on current models (set in `managed-settings.d/00-env.json`); if `TaskCreate`/`TaskUpdate`/`TaskList` are not in your tool list, track batches in the checkpoint log only and skip every task-tool step below (including marking tasks completed).
 
 ## Step 2.5 — Branch Pre-Flight
 
