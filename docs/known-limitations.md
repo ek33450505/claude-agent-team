@@ -38,18 +38,15 @@ This document records framework-level limitations that are not bugs but rather c
 
 ---
 
-## 2. Agent Tool Unavailable at Nesting Depth >= 3
+## 2. Nested agent dispatch is disabled (CAST pins depth 1)
 
-> **Status as of v7 Phase 1 (2026-05-08):** Still accurate. Claude Code enforces nesting depth limits on tool availability and there is no known upstream change to this behavior. The workarounds below remain the recommended mitigations.
+> **Status as of 2026-11-20:** Intentional. Native nesting has changed across Claude Code releases: subagents could spawn subagents up to 5 levels in 2.1.172; nesting was off by default in 2.1.217; and since 2.1.219 the native default depth is 3 (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`). CAST pins `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` in `managed-settings.d/00-env.json` regardless of the native default.
 
-**Symptom:** Agents nested 3+ levels deep (main session → specialist agent → sub-agent) may not have access to the `Agent` tool, causing self-dispatch chains to silently fail.
+**Symptom:** A dispatched agent has no `Agent` tool, so it cannot spawn its own agents. Self-dispatch chains (e.g. `backend-writer` dispatching `code-reviewer`) do not run.
 
-**Root cause:** Claude Code imposes a nesting depth limit on tool availability. The `Agent` tool is restricted in deeply nested subagent contexts.
+**Root cause:** By design. CAST pins depth 1 on purpose: a dispatched agent cannot spawn its own agents, so the dispatching session runs the review gate.
 
-**Workaround:**
-- The main session acts as fallback enforcer: it checks each agent's response for the expected downstream dispatch confirmation.
-- If an agent finishes without its mandatory chain (e.g., `backend-writer` completes without dispatching `code-reviewer`), the main session re-dispatches the missing agent.
-- The `post-tool-hook.sh` injects a `DEEP NESTING WARNING` when `SUBAGENT_DEPTH >= 2` to alert the agent.
+**Workaround:** The dispatching session dispatches reviewers and commits.
 
 **Detection:** Parse the agent's `Status:` block. If no chain confirmation is present and the agent was expected to self-dispatch, re-dispatch inline.
 
