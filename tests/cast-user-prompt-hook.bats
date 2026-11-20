@@ -1202,3 +1202,53 @@ _mk_routing_db() {
   assert_output "0"
   [ ! -e "$bad" ]
 }
+
+# ---------------------------------------------------------------------------
+# Slash commands skip the memory router (CC 2.1.299: hook sees raw /command text)
+# ---------------------------------------------------------------------------
+
+_write_marker_router() {
+  local tmpdir="$1"
+  cat > "$tmpdir/cast-memory-router.py" << 'STUBEOF'
+import json, os
+open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "router-called"), "w").close()
+print(json.dumps([{"score": 0.9, "type": "reference", "name": "m1", "content": "some content"}]))
+STUBEOF
+}
+
+@test "slash-command prompt skips memory router (no recall, router not called)" {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  make_payload 'sess-slash' '/cast status please check everything' > "$tmpdir/input.json"
+  _write_marker_router "$tmpdir"
+
+  run bash -c 'cd "$1" && _CAST_ROUTER="$1/cast-memory-router.py" bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
+  assert_success
+  refute_output --partial 'memory-recall'
+  [ ! -e "$tmpdir/router-called" ]
+  rm -rf "$tmpdir"
+}
+
+@test "non-slash prompt reaches memory router (control)" {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  make_payload 'sess-nonslash' 'cast status please check everything' > "$tmpdir/input.json"
+  _write_marker_router "$tmpdir"
+
+  run bash -c 'cd "$1" && _CAST_ROUTER="$1/cast-memory-router.py" bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
+  assert_success
+  [ -e "$tmpdir/router-called" ]
+  rm -rf "$tmpdir"
+}
+
+@test "path-shaped prompt starting with slash still reaches memory router" {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  make_payload 'sess-path' '/Users/testuser/project/app.py is broken please help' > "$tmpdir/input.json"
+  _write_marker_router "$tmpdir"
+
+  run bash -c 'cd "$1" && _CAST_ROUTER="$1/cast-memory-router.py" bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
+  assert_success
+  [ -e "$tmpdir/router-called" ]
+  rm -rf "$tmpdir"
+}
