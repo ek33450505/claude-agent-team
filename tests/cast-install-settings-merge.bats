@@ -24,40 +24,6 @@ teardown() {
   teardown_temp_home
 }
 
-# Helper: run the fragment-copy + merge-regen block from install.sh
-# in a sandboxed CLAUDE_DIR. Simulates what install.sh does.
-_run_install_fragment_block() {
-  local claude_dir="$1"
-  local script_dir="$REPO_DIR"
-
-  # Copy fragments (skip-if-exists)
-  local installed=0 skipped=0
-  for fragment in "$script_dir"/managed-settings.d/*.json; do
-    [ -f "$fragment" ] || continue
-    local base
-    base="$(basename "$fragment")"
-    local dest="$claude_dir/managed-settings.d/$base"
-    if [ -f "$dest" ]; then
-      skipped=$((skipped + 1))
-    else
-      cp "$fragment" "$dest"
-      installed=$((installed + 1))
-    fi
-  done
-
-  # Regenerate settings.json from fragments
-  if [ -x "$claude_dir/scripts/cast-merge-settings.sh" ]; then
-    # Override FRAGMENT_DIR by temporarily symlinking
-    local orig_home="$HOME"
-    HOME="$TEST_TMPDIR" \
-      FRAGMENT_DIR_OVERRIDE="$claude_dir/managed-settings.d" \
-      bash "$claude_dir/scripts/cast-merge-settings.sh" "$claude_dir/settings.json" >/dev/null 2>&1
-    local exit_code=$?
-    HOME="$orig_home"
-    return $exit_code
-  fi
-}
-
 # Helper: run merge with explicit fragment dir (since cast-merge-settings.sh uses $HOME/.claude)
 _run_merge_with_dir() {
   local fragment_dir="$1"
@@ -138,41 +104,24 @@ PYEOF
   done
 }
 
-@test "install preserves downstream-only fragments and user-customizable fragments (skip-if-exists)" {
-  # Pre-create a downstream-only fragment (filename not in source) with distinctive content
-  local downstream="$TEST_CLAUDE_DIR/managed-settings.d/99-downstream.json"
-  printf '{"_downstream":"preserve-me-123"}' > "$downstream"
+@test "real install preserves a downstream-only fragment and its keys win the merge when it sorts last" {
+  # Downstream-only: name absent from the repo, sorts after every repo fragment
+  [ ! -e "$REPO_DIR/managed-settings.d/90-personal-defaults.json" ]
+  run env CAST_INSTALL_FORCE=1 bash "$REPO_DIR/install.sh"
+  assert_success
+  local personal="$HOME/.claude/managed-settings.d/90-personal-defaults.json"
+  printf '%s\n' '{"model":"personal-marker-model","_downstream":"preserve-me-123"}' > "$personal"
 
-  # Pre-create a user-customizable fragment (50-mcp.json — not a *-hooks-* file in name)
-  # to verify the skip-if-exists path for non-hook fragments
-  local user_frag="$TEST_CLAUDE_DIR/managed-settings.d/50-mcp.json"
-  printf '{"_user_custom":"my-mcp-config"}' > "$user_frag"
+  CAST_INSTALL_FORCE=1 run bash "$REPO_DIR/install.sh"
+  assert_success
 
-  # Run install fragment block (mirrors the dual policy in install.sh)
-  for fragment in "$REPO_DIR"/managed-settings.d/*.json; do
-    [ -f "$fragment" ] || continue
-    base="$(basename "$fragment")"
-    dest="$TEST_CLAUDE_DIR/managed-settings.d/$base"
-    case "$base" in
-      *-hooks-*.json)
-        cp "$fragment" "$dest"
-        ;;
-      *)
-        [ -f "$dest" ] && continue
-        cp "$fragment" "$dest"
-        ;;
-    esac
-  done
+  # File untouched by the reinstall
+  [ "$(cat "$personal")" = '{"model":"personal-marker-model","_downstream":"preserve-me-123"}' ]
 
-  # Downstream-only fragment must be unchanged
-  local content
-  content=$(cat "$downstream")
-  [ "$content" = '{"_downstream":"preserve-me-123"}' ]
-
-  # User-customizable fragment must not have been overwritten
-  local user_marker
-  user_marker=$(python3 -c "import json; d=json.load(open('$user_frag')); print(d.get('_user_custom',''))")
-  [ "$user_marker" = "my-mcp-config" ]
+  # Regenerated settings.json carries its values (last fragment wins)
+  local merged
+  merged=$(python3 -c "import json,os; d=json.load(open(os.path.expanduser('~/.claude/settings.json'))); print(d.get('model'), d.get('_downstream'))")
+  [ "$merged" = "personal-marker-model preserve-me-123" ]
 }
 
 @test "install overwrites stale CAST-owned hook fragments to propagate source updates" {
