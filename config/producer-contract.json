@@ -18,19 +18,19 @@
     },
     {
       "table": "agent_truncations",
-      "writers": ["cast_subagent_stop.py:2314"],
+      "writers": ["cast_subagent_stop.py:2336"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "agent_protocol_violations",
-      "writers": ["cast_subagent_stop.py:2845"],
+      "writers": ["cast_subagent_stop.py:2867"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "quality_gates",
-      "writers": ["cast_subagent_stop.py:2581", "orchestrate-dispatch.py:138", "write-guards.py:172"],
+      "writers": ["cast_subagent_stop.py:2603", "orchestrate-dispatch.py:138", "write-guards.py:172"],
       "cadence": "per_agent_run",
       "status": "live",
       "notes": "gate_type populated from 2026-07-03"
@@ -44,7 +44,7 @@
     },
     {
       "table": "agent_memories",
-      "writers": ["cast-memory-write.sh", "cast-memory-router.py:555", "cast-session-end.sh:431", "cast-memory-facts-write.py"],
+      "writers": ["cast-memory-write.sh", "cast-memory-router.py:585", "cast-session-end.sh:435", "cast-memory-facts-write.py"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -56,7 +56,7 @@
     },
     {
       "table": "routing_events",
-      "writers": ["cast-user-prompt-hook.sh:169", "cast_subagent_stop.py:2930", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
+      "writers": ["cast-user-prompt-hook.sh:169", "cast_subagent_stop.py:2952", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -87,7 +87,7 @@
     },
     {
       "table": "completeness_events",
-      "writers": ["cast_subagent_stop.py:2376"],
+      "writers": ["cast_subagent_stop.py:2398"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -144,7 +144,7 @@
     },
     {
       "table": "incidents",
-      "writers": ["cast_subagent_stop.py:3098", "cast-abandon-stale-runs.py:525"],
+      "writers": ["cast_subagent_stop.py:3120", "cast-abandon-stale-runs.py:525"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -156,14 +156,14 @@
     },
     {
       "table": "otel_events",
-      "writers": ["cast-otel-collector.py:297"],
+      "writers": ["cast-otel-collector.py:282"],
       "cadence": "per_event",
       "status": "live",
       "notes": "max received_at 2026-07-02 — collector possibly stalled; flagged 2026-07-03"
     },
     {
       "table": "otel_metrics",
-      "writers": ["cast-otel-collector.py:280"],
+      "writers": ["cast-otel-collector.py:277"],
       "cadence": "per_event",
       "status": "live",
       "notes": "max received_at 2026-07-02 — collector possibly stalled; flagged 2026-07-03"
@@ -183,7 +183,7 @@
     },
     {
       "table": "budgets",
-      "writers": ["bin/cast:1618"],
+      "writers": ["bin/cast:1614"],
       "cadence": "on_demand",
       "status": "live"
     },
@@ -203,7 +203,7 @@
     },
     {
       "table": "record_embed",
-      "writers": ["cast-ask-index.py:696 (--embed)"],
+      "writers": ["cast-ask-index.py:733 (--embed)"],
       "cadence": "daily",
       "status": "live",
       "notes": "live from 2026-07-03 (maintenance step)"
@@ -289,7 +289,7 @@
     },
     {
       "table": "review_gate_decisions",
-      "writers": ["cast-review-gate.py:601"],
+      "writers": ["cast-review-gate.py:600"],
       "cadence": "per_event",
       "status": "live",
       "notes": "NEW v10.6.0 U2 (migration 038; source column migration 039: 'cli' here, 'guard' from the in-process git guard). One row per cast-review-gate.py run (WARN mode: the gate never blocks; would_block records what enforcement WOULD have done). Not written when the DB or table is missing (the gate never creates a DB). created_at is SQLite space format."

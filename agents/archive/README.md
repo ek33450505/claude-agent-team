@@ -13,7 +13,7 @@ agent registry. Deleting them would lose that context permanently.
 |------|---------|----------------|
 | `ADD-CANDIDATES-NOT-JUSTIFIED.md` | Documents agents evaluated and rejected during Phase 4.5.4 research sprint (marketing-copy and others) | Meta-document, not an agent definition; retained as decision record |
 | `adr-writer.md` | Architecture Decision Record author — drafts ADRs in standard Title/Status/Context/Decision/Consequences format | Functionality absorbed into `docs` agent; ADR authoring is infrequent enough to handle inline |
-| `email-drafter.md` | Professional email composer — drafts emails from bullet points, never sends | Superseded by direct user authoring + docs agent for low-frequency task |
+| `email-drafter.md` | Professional email composer — drafts emails from bullet points, never sends | Superseded by direct user authoring + docs agent for low-frequency task. **Restored** to `agents/core/email-drafter.md` in the roster split (#340); this archived copy is historical only |
 | `knowledge-curator.md` | Obsidian vault organizer — links notes, surfaces stale content, suggests tag cleanup | Routine converted to scheduled `cast-routines` job; no longer needs a standing agent |
 | `learning-scout.md` | Tech topic monitor and resource curator — searches for learning resources, writes structured Obsidian summaries | Routine converted to scheduled `cast-routines` job (`learning-scout.yaml`) |
 | `meeting-prep.md` | Meeting preparation agent — pulls calendar via Google Calendar MCP, writes per-meeting briefs | Routine converted to scheduled `cast-routines` job (`meeting-prep.yaml`) |
