@@ -150,3 +150,70 @@ EOF
   assert_success
   unset CAST_MANAGED_AGENT_BETA_HEADER
 }
+
+@test "non-allowlisted ANTHROPIC_API_BASE is refused before any curl call" {
+  export ANTHROPIC_API_KEY="test-key-12345"
+  cat > "${MOCK_BIN_DIR}/curl" <<'CURL_MOCK'
+#!/bin/bash
+touch "${BATS_TMPDIR}/curl-called"
+CURL_MOCK
+  chmod +x "${MOCK_BIN_DIR}/curl"
+  ANTHROPIC_API_BASE=https://evil.example.com run bash "$SHIM" test-agent "do something"
+  assert_failure
+  assert_output --partial "not allowed"
+  [ ! -e "${BATS_TMPDIR}/curl-called" ]
+}
+
+@test "API key is never on curl argv (_curl_step path)" {
+  export ANTHROPIC_API_KEY="FAKEKEY_argv_probe_987"
+  cat > "${MOCK_BIN_DIR}/curl" <<'CURL_MOCK'
+#!/bin/bash
+prev=""
+for a in "$@"; do
+  printf '%s\n' "$a" >> "${BATS_TMPDIR}/curl-argv.log"
+  [ "$prev" = "-K" ] && cat "$a" >> "${BATS_TMPDIR}/curl-cfg.log"
+  prev="$a"
+done
+echo '{"id":"agent_test123","type":"agent"}'
+echo ""
+echo "__HTTP_STATUS__200"
+CURL_MOCK
+  chmod +x "${MOCK_BIN_DIR}/curl"
+  run bash "$SHIM" --define-only test-agent "do something"
+  [ -s "${BATS_TMPDIR}/curl-argv.log" ]
+  run grep -c "FAKEKEY_argv_probe_987" "${BATS_TMPDIR}/curl-argv.log"
+  assert_output "0"
+  grep -qF 'header = "x-api-key: FAKEKEY_argv_probe_987"' "${BATS_TMPDIR}/curl-cfg.log"
+}
+
+@test "authority parse: bypass shapes refused, curl never invoked; good bases accepted" {
+  export ANTHROPIC_API_KEY="test-key-12345"
+  cat > "${MOCK_BIN_DIR}/curl" <<'CURL_MOCK'
+#!/bin/bash
+touch "${BATS_TMPDIR}/curl-called"
+echo '{"id":"agent_test123"}'
+echo ""
+echo "__HTTP_STATUS__200"
+CURL_MOCK
+  chmod +x "${MOCK_BIN_DIR}/curl"
+  local bad good
+  for bad in 'https://api.anthropic.com:x@evil.example/v1' 'https://api.anthropic.com@evil.example' \
+    'https://localhost:8443@evil.example' 'https://api.anthropic.com:/x' 'https://api.anthropic.com:99999999' \
+    'https://api.anthropic.com.evil.example' 'http://api.anthropic.com'; do
+    ANTHROPIC_API_BASE="$bad" run bash "$SHIM" --define-only test-agent "x"
+    [ "$status" -ne 0 ]
+    [ ! -e "${BATS_TMPDIR}/curl-called" ]
+  done
+  for good in 'https://api.anthropic.com' 'https://api.anthropic.com/v1' 'https://localhost:8443' 'https://localhost:8443/v1'; do
+    rm -f "${BATS_TMPDIR}/curl-called"
+    ANTHROPIC_API_BASE="$good" run bash "$SHIM" --define-only test-agent "x"
+    [ -e "${BATS_TMPDIR}/curl-called" ]
+  done
+}
+
+@test "API key containing a quote is refused before curl" {
+  export ANTHROPIC_API_KEY='bad"key'
+  run bash "$SHIM" --define-only test-agent "x"
+  [ "$status" -ne 0 ]
+  [ ! -e "${BATS_TMPDIR}/curl-called" ]
+}

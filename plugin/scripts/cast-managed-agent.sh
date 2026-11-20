@@ -25,6 +25,35 @@ fi
 # --- Constants ---
 BETA_HEADER="${CAST_MANAGED_AGENT_BETA_HEADER:-managed-agents-2026-04-01}"
 API_BASE="${ANTHROPIC_API_BASE:-https://api.anthropic.com}"
+# Authority parse (not prefix matching): https only, no userinfo, host exactly
+# api.anthropic.com or localhost, optional :1-5 digit port.
+_cast_url_allowed() {
+  local url="$1" rest authority host port
+  case "$url" in *[[:space:]]*) return 1 ;; esac
+  case "$url" in https://*) ;; *) return 1 ;; esac
+  rest="${url#https://}"
+  authority="${rest%%[/?#]*}"
+  case "$authority" in "" | *@*) return 1 ;; esac
+  host="${authority%%:*}"
+  case "$host" in api.anthropic.com | localhost) ;; *) return 1 ;; esac
+  if [[ "$authority" != "$host" ]]; then
+    port="${authority#"$host":}"
+    case "$port" in "" | *[!0-9]*) return 1 ;; esac
+    [[ ${#port} -le 5 ]] || return 1
+  fi
+  return 0
+}
+
+# A key containing a quote, backslash, CR or LF would break out of the curl
+# config line (-K) that carries it, so refuse it.
+_cast_key_ok() {
+  case "$1" in *\"*) return 1 ;; *\\*) return 1 ;; *$'\r'*) return 1 ;; *$'\n'*) return 1 ;; esac
+  return 0
+}
+if ! _cast_url_allowed "$API_BASE"; then
+  echo "ERROR: ANTHROPIC_API_BASE '$API_BASE' is not allowed (must be https://api.anthropic.com or https://localhost[:port]); refusing to send the API key." >&2
+  exit 1
+fi
 LOG_DIR="${HOME}/.claude/logs"
 LOG_FILE="${LOG_DIR}/managed-agent-invocations.log"
 
@@ -80,6 +109,10 @@ fi
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   echo "ERROR: ANTHROPIC_API_KEY not set (env var or keychain)" >&2
   exit 2
+fi
+if ! _cast_key_ok "$ANTHROPIC_API_KEY"; then
+  echo "ERROR: ANTHROPIC_API_KEY contains a disallowed character (quote, backslash, CR or LF)" >&2
+  exit 1
 fi
 
 # --- Logging setup ---
@@ -164,8 +197,9 @@ _curl_step() {
     --show-error \
     --fail-with-body \
     --max-redirs 3 \
+    --connect-timeout 10 --max-time 120 \
     -X "$method" "$url" \
-    -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+    -K <(printf 'header = "x-api-key: %s"\n' "$ANTHROPIC_API_KEY") \
     -H "anthropic-beta: ${BETA_HEADER}" \
     -H "anthropic-version: 2023-06-01" \
     -H "content-type: application/json" \
@@ -407,6 +441,9 @@ else
   curl_sse_exit=0
   parse_sse_exit=0
   sse_tmpfile="$(mktemp "${TMPDIR:-/tmp}/cast-managed-agent-sse.XXXXXX")"
+  # Remove the tmpfile on any exit (abnormal included). No other EXIT trap is
+  # set in this script, so there is nothing to chain.
+  trap 'rm -f "$sse_tmpfile"' EXIT
 
   # NOTE: this is a 4-stage pipeline (echo|curl|tee|_parse_sse_lines). Under
   # `set -o pipefail` the pipeline's own exit status is the rightmost NONZERO
@@ -421,8 +458,9 @@ else
     --silent \
     --show-error \
     --max-redirs 3 \
+    --connect-timeout 10 \
     -X POST "${API_BASE}/v1/sessions" \
-    -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+    -K <(printf 'header = "x-api-key: %s"\n' "$ANTHROPIC_API_KEY") \
     -H "anthropic-beta: ${BETA_HEADER}" \
     -H "anthropic-version: 2023-06-01" \
     -H "content-type: application/json" \

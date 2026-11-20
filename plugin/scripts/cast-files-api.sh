@@ -20,6 +20,35 @@ fi
 # --- Constants ---
 BETA_HEADER="files-api-2025-04-14"
 API_BASE="${ANTHROPIC_API_BASE:-https://api.anthropic.com}"
+# Authority parse (not prefix matching): https only, no userinfo, host exactly
+# api.anthropic.com or localhost, optional :1-5 digit port.
+_cast_url_allowed() {
+  local url="$1" rest authority host port
+  case "$url" in *[[:space:]]*) return 1 ;; esac
+  case "$url" in https://*) ;; *) return 1 ;; esac
+  rest="${url#https://}"
+  authority="${rest%%[/?#]*}"
+  case "$authority" in "" | *@*) return 1 ;; esac
+  host="${authority%%:*}"
+  case "$host" in api.anthropic.com | localhost) ;; *) return 1 ;; esac
+  if [[ "$authority" != "$host" ]]; then
+    port="${authority#"$host":}"
+    case "$port" in "" | *[!0-9]*) return 1 ;; esac
+    [[ ${#port} -le 5 ]] || return 1
+  fi
+  return 0
+}
+
+# A key containing a quote, backslash, CR or LF would break out of the curl
+# config line (-K) that carries it, so refuse it.
+_cast_key_ok() {
+  case "$1" in *\"*) return 1 ;; *\\*) return 1 ;; *$'\r'*) return 1 ;; *$'\n'*) return 1 ;; esac
+  return 0
+}
+if ! _cast_url_allowed "$API_BASE"; then
+  echo "ERROR: ANTHROPIC_API_BASE '$API_BASE' is not allowed (must be https://api.anthropic.com or https://localhost[:port]); refusing to send the API key." >&2
+  exit 1
+fi
 LOG_DIR="${HOME}/.claude/logs"
 LOG_FILE="${LOG_DIR}/files-api.log"
 
@@ -36,6 +65,10 @@ fi
 
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   echo "ERROR: ANTHROPIC_API_KEY not set (env var or keychain)" >&2
+  exit 1
+fi
+if ! _cast_key_ok "$ANTHROPIC_API_KEY"; then
+  echo "ERROR: ANTHROPIC_API_KEY contains a disallowed character (quote, backslash, CR or LF)" >&2
   exit 1
 fi
 
@@ -128,8 +161,9 @@ case "$SUBCOMMAND" in
       --silent \
       --show-error \
       --fail-with-body \
+      --connect-timeout 10 --speed-limit 1024 --speed-time 60 \
       -X POST "${API_BASE}/v1/files" \
-      -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+      -K <(printf 'header = "x-api-key: %s"\n' "$ANTHROPIC_API_KEY") \
       -H "anthropic-beta: ${BETA_HEADER}" \
       -F "file=@${LOCAL_FILE_PATH}" \
       -F "mime_type=application/octet-stream" \
@@ -181,8 +215,9 @@ case "$SUBCOMMAND" in
       --silent \
       --show-error \
       --fail-with-body \
+      --connect-timeout 10 --speed-limit 1024 --speed-time 60 \
       -X GET "${API_BASE}/v1/files/${FILE_ID}/content" \
-      -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+      -K <(printf 'header = "x-api-key: %s"\n' "$ANTHROPIC_API_KEY") \
       -H "anthropic-beta: ${BETA_HEADER}" \
       -o "$DEST_PATH" \
       2>&1 || {
@@ -211,8 +246,9 @@ case "$SUBCOMMAND" in
       --silent \
       --show-error \
       --fail-with-body \
+      --connect-timeout 10 --max-time 120 \
       -X DELETE "${API_BASE}/v1/files/${FILE_ID}" \
-      -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+      -K <(printf 'header = "x-api-key: %s"\n' "$ANTHROPIC_API_KEY") \
       -H "anthropic-beta: ${BETA_HEADER}" \
       > /dev/null 2>&1 || {
       CURL_EXIT=$?

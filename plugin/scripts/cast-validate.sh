@@ -359,9 +359,43 @@ if [[ -z "$KEY" ]]; then
   info "Model availability: skipped (no ANTHROPIC_API_KEY; opt-in: export it or cast-keychain.sh set anthropic-api-key)"
 else
   MODELS_URL="${CAST_MODELS_ENDPOINT:-https://api.anthropic.com/v1/models}"
-  MODELS_JSON="$({ curl -s --connect-timeout 5 --max-time 10 "$MODELS_URL" \
-      -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" 2>/dev/null || true; })"
-  if [[ -z "$MODELS_JSON" ]] || ! printf '%s' "$MODELS_JSON" | grep -q '"data"'; then
+  MODELS_JSON=""
+  # Authority-parse allowlist: never send the key to another host.
+  _cast_url_allowed() {
+    local url="$1" rest authority host port
+    case "$url" in *[[:space:]]*) return 1 ;; esac
+    case "$url" in https://*) ;; *) return 1 ;; esac
+    rest="${url#https://}"
+    authority="${rest%%[/?#]*}"
+    case "$authority" in "" | *@*) return 1 ;; esac
+    host="${authority%%:*}"
+    case "$host" in api.anthropic.com | localhost) ;; *) return 1 ;; esac
+    if [[ "$authority" != "$host" ]]; then
+      port="${authority#"$host":}"
+      case "$port" in "" | *[!0-9]*) return 1 ;; esac
+      [[ ${#port} -le 5 ]] || return 1
+    fi
+    return 0
+  }
+  MODELS_REFUSED=""
+  if ! _cast_url_allowed "$MODELS_URL"; then
+    MODELS_REFUSED="CAST_MODELS_ENDPOINT '$MODELS_URL' is not an allowed host (https://api.anthropic.com or https://localhost[:port]); refusing to send the API key"
+  else
+    # A key with a quote, backslash, CR or LF would break out of the -K config line.
+    case "$KEY" in
+      *\"* | *\\* | *$'\r'* | *$'\n'*)
+        MODELS_REFUSED="ANTHROPIC_API_KEY contains a disallowed character (quote, backslash, CR or LF); refusing to send it"
+        ;;
+    esac
+  fi
+  if [[ -z "$MODELS_REFUSED" ]]; then
+    MODELS_JSON="$({ curl -s --connect-timeout 5 --max-time 10 "$MODELS_URL" \
+        -K <(printf 'header = "x-api-key: %s"\n' "$KEY") \
+        -H "anthropic-version: 2023-06-01" 2>/dev/null || true; })"
+  fi
+  if [[ -n "$MODELS_REFUSED" ]]; then
+    fail "Model availability: $MODELS_REFUSED"
+  elif [[ -z "$MODELS_JSON" ]] || ! printf '%s' "$MODELS_JSON" | grep -q '"data"'; then
     info "Model availability: skipped (could not reach $MODELS_URL)"
   else
     for tier in opus sonnet haiku; do

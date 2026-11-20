@@ -113,3 +113,35 @@ except Exception as e:
   sys.exit(1)
 PYEOF
 }
+
+@test "dispatch: API key is never on curl argv and the call has timeouts" {
+  export ANTHROPIC_API_KEY="FAKEKEY_argv_probe_987"
+  cat > "${MOCK_BIN_DIR}/curl" <<'CURL_MOCK'
+#!/bin/bash
+prev=""
+for a in "$@"; do
+  printf '%s\n' "$a"
+  [ "$prev" = "-K" ] && cat "$a" > "${BATS_TMPDIR}/curl-cfg.log"
+  prev="$a"
+done > "${BATS_TMPDIR}/curl-argv.log"
+echo '{"id":"msgbatch_argv"}'
+CURL_MOCK
+  chmod +x "${MOCK_BIN_DIR}/curl"
+  run bash "$CAST_BATCH_DISPATCH_SH" commit "$PROMPT_FILE"
+  assert_success
+  assert_output "msgbatch_argv"
+  run grep -c "FAKEKEY_argv_probe_987" "${BATS_TMPDIR}/curl-argv.log"
+  assert_output "0"
+  grep -qF 'header = "x-api-key: FAKEKEY_argv_probe_987"' "${BATS_TMPDIR}/curl-cfg.log"
+  grep -qx -e '--data-binary' "${BATS_TMPDIR}/curl-argv.log"
+  run grep -c -e '--max-time' -e '--connect-timeout' "${BATS_TMPDIR}/curl-argv.log"
+  assert_output "2"
+}
+
+@test "dispatch: API key containing a quote is refused before curl" {
+  rm -f "${BATS_TMPDIR}/curl-argv.log"
+  export ANTHROPIC_API_KEY='bad"key'
+  run bash "$CAST_BATCH_DISPATCH_SH" commit "$PROMPT_FILE"
+  assert_failure
+  assert_output --partial "disallowed character"
+}

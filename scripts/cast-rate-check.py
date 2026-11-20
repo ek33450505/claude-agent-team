@@ -25,6 +25,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,13 +33,33 @@ from pathlib import Path
 
 LOG_FILE = Path.home() / ".claude" / "logs" / "cast-rate-check.log"
 
-_ALLOWED_API_BASE_PREFIXES = ("https://api.anthropic.com", "https://localhost")
+_ALLOWED_API_HOSTS = frozenset({"api.anthropic.com", "localhost"})
+
+
+def _api_base_allowed(url: str) -> bool:
+    """True only for https URLs with no userinfo and an exactly-allowed host."""
+    if not url or any(c.isspace() for c in url) or "\\" in url:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port  # raises ValueError on a non-numeric / out-of-range port
+    except ValueError:
+        return False
+    if not url.startswith("https://") or parts.username is not None or parts.password is not None:
+        return False
+    # urlsplit lowercases .hostname; compare the raw host as written (shell parity).
+    if "@" in parts.netloc or parts.netloc.endswith(":"):
+        return False
+    if parts.netloc.split(":", 1)[0] not in _ALLOWED_API_HOSTS:
+        return False
+    return port is None or 0 < port <= 65535
+
 
 _raw_api_base = os.environ.get("ANTHROPIC_API_BASE", "https://api.anthropic.com")
-if not any(_raw_api_base.startswith(prefix) for prefix in _ALLOWED_API_BASE_PREFIXES):
+if not _api_base_allowed(_raw_api_base):
     raise ValueError(
         f"ANTHROPIC_API_BASE {_raw_api_base!r} is not allowed. "
-        f"Must start with one of: {_ALLOWED_API_BASE_PREFIXES}"
+        f"Must be https://<host>[:port] with host one of: {sorted(_ALLOWED_API_HOSTS)}"
     )
 API_BASE = _raw_api_base
 

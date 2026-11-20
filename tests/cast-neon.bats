@@ -269,3 +269,11 @@ SECSTUB
   assert_output --partial "DELETE"
   [ ! -e "$CURL_ARGV_FILE" ]
 }
+
+@test "API key containing a double quote -> exit 1 before curl runs" {
+  run env 'NEON_API_KEY=bad"key' bash "$CAST_NEON_SH" list-projects
+  assert_failure
+  [ "$status" -eq 1 ]
+  assert_output --partial "disallowed character"
+  [ ! -e "$CURL_ARGV_FILE" ]
+}

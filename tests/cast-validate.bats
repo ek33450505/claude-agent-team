@@ -524,3 +524,60 @@ JSON
   # Explicitly assert the exit code is non-zero (warnings detected)
   [ "$status" -ne 0 ]
 }
+
+@test "model availability: non-allowlisted CAST_MODELS_ENDPOINT is refused and curl never called" {
+  build_clean_install
+  printf '#!/bin/bash\ncase "$*" in *11434*) exit 7 ;; esac\ntouch "%s"\nexit 7\n' "$HOME/curl-called" > "$HOME/.stub-bin/curl"
+  chmod +x "$HOME/.stub-bin/curl"
+  run env ANTHROPIC_API_KEY=test CAST_MODELS_ENDPOINT=https://evil.example.com/v1/models bash "$VALIDATE_SH"
+  [ "$status" -eq 2 ]
+  assert_output --partial "not an allowed host"
+  assert_output --partial "1 error"
+  [ ! -e "$HOME/curl-called" ]
+}
+
+@test "model availability: API key is not on curl argv" {
+  build_clean_install
+  printf '#!/bin/bash\ncase "$*" in *11434*) exit 7 ;; esac\nfor a in "$@"; do printf "%%s\\n" "$a"; done >> "%s"\nexit 7\n' "$HOME/curl-argv.log" > "$HOME/.stub-bin/curl"
+  chmod +x "$HOME/.stub-bin/curl"
+  run env ANTHROPIC_API_KEY=FAKEKEY_argv_probe_987 CAST_MODELS_ENDPOINT=https://api.anthropic.com/v1/models bash "$VALIDATE_SH"
+  # control: the models call was logged, so key absence is checked on the right call
+  run grep -c 'https://api.anthropic.com/v1/models' "$HOME/curl-argv.log"
+  [ "$output" -ge 1 ]
+  run grep -c FAKEKEY_argv_probe_987 "$HOME/curl-argv.log"
+  assert_output "0"
+}
+
+@test "model availability: authority-parse bypass shapes refused, curl never invoked" {
+  build_clean_install
+  printf '#!/bin/bash\ncase "$*" in *11434*) exit 7 ;; esac\ntouch "%s"\nexit 7\n' "$HOME/curl-called" > "$HOME/.stub-bin/curl"
+  chmod +x "$HOME/.stub-bin/curl"
+  local bad
+  for bad in 'https://api.anthropic.com:x@evil.example/v1' 'https://api.anthropic.com@evil.example' \
+    'https://localhost:8443@evil.example' 'https://api.anthropic.com:/x' 'https://api.anthropic.com:99999999' \
+    'https://api.anthropic.com.evil.example' 'http://api.anthropic.com'; do
+    run env ANTHROPIC_API_KEY=test "CAST_MODELS_ENDPOINT=$bad" bash "$VALIDATE_SH"
+    assert_failure
+    assert_output --partial "not an allowed host"
+    [ ! -e "$HOME/curl-called" ]
+  done
+}
+
+@test "model availability: legitimate endpoints reach curl" {
+  build_clean_install
+  local good
+  for good in 'https://api.anthropic.com' 'https://api.anthropic.com/v1' 'https://localhost:8443' 'https://localhost:8443/v1'; do
+    rm -f "$HOME/curl-called"
+    printf '#!/bin/bash\ncase "$*" in *11434*) exit 7 ;; esac\ntouch "%s"\nexit 7\n' "$HOME/curl-called" > "$HOME/.stub-bin/curl"
+    run env ANTHROPIC_API_KEY=test "CAST_MODELS_ENDPOINT=$good" bash "$VALIDATE_SH"
+    [ -e "$HOME/curl-called" ]
+  done
+}
+
+@test "model availability: API key containing a quote is refused before curl" {
+  build_clean_install
+  run env 'ANTHROPIC_API_KEY=bad"key' CAST_MODELS_ENDPOINT=https://api.anthropic.com/v1/models bash "$VALIDATE_SH"
+  [ "$status" -eq 2 ]
+  assert_output --partial "disallowed character"
+  assert_output --partial "1 error"
+}

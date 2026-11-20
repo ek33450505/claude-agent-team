@@ -164,6 +164,14 @@ if [[ -z "$NEON_API_KEY_RESOLVED" ]]; then
   exit 1
 fi
 
+# A quote, backslash, CR or LF would break out of the curl config line below.
+case "$NEON_API_KEY_RESOLVED" in
+  *\"* | *\\* | *$'\r'* | *$'\n'*)
+    _err "Neon API key contains a disallowed character (quote, backslash, CR or LF)"
+    exit 1
+    ;;
+esac
+
 # --- request execution ------------------------------------------------
 # $1=method $2=path $3=optional JSON body. Handles --dry-run internally so
 # every command gets identical dry-run behavior for free.
@@ -195,7 +203,7 @@ _do_request() {
   local response=""
   local rc=0
   set +e
-  response="$(printf 'header = "Authorization: Bearer %s"\n' "$NEON_API_KEY_RESOLVED" | curl -K - "${curl_args[@]}" 2>&1)"
+  response="$(printf 'header = "Authorization: Bearer %s"\n' "$NEON_API_KEY_RESOLVED" | curl -K - --connect-timeout 10 --max-time 120 "${curl_args[@]}" 2>&1)"
   rc=$?
   set -e
   if [[ "$rc" -ne 0 ]]; then
