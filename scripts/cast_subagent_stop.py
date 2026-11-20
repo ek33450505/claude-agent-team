@@ -1234,6 +1234,61 @@ def stage1_event_file(ctx: Ctx) -> None:
 
 
 # ── Stage 2: transcript glob + 20MB guard + cost + Phase-2 enrichment ────────
+_LEG_COLUMNS = ("cost_usd", "input_tokens", "output_tokens",
+                "cache_read_input_tokens", "cache_creation_input_tokens", "tool_uses")
+
+
+def _prior_leg_totals(conn, agent_id: str, row_id) -> dict:
+    """SUM of each per-leg column over this agent_id's rows EARLIER than row_id.
+
+    NULL priors count as 0 (SUM ignores them). When row_id is None it is resolved
+    the way the stage-2 UPDATE locates its row: the MIN running row, else the
+    latest abandoned row. Returns {} when no target row resolves.
+    """
+    if row_id is None:
+        r = conn.execute(
+            "SELECT COALESCE("
+            "  (SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?),"
+            "  (SELECT id FROM agent_runs WHERE agent_id=? AND status='abandoned'"
+            "     AND id=(SELECT MAX(id) FROM agent_runs WHERE agent_id=?)))",
+            (agent_id, agent_id, agent_id),
+        ).fetchone()
+        row_id = r[0] if r else None
+    if row_id is None:
+        return {}
+    sums = ", ".join(f"COALESCE(SUM({c}), 0)" for c in _LEG_COLUMNS)
+    row = conn.execute(
+        f"SELECT {sums} FROM agent_runs WHERE agent_id=? AND id<?", (agent_id, row_id)
+    ).fetchone()
+    return dict(zip(_LEG_COLUMNS, row))
+
+
+def _leg_delta_values(db: str, agent_id: str, row_id, current: dict) -> dict:
+    """current (cumulative transcript totals) minus earlier legs' stored values.
+
+    None stays None. Each result is clamped at >= 0: rows written before this
+    change hold cumulative values, so an agent resumed across the fix can
+    over-subtract; that residual is clamped, not corrected (no migration).
+    """
+    # Short timeout: this read-only lookup plus the 3x5s UPDATE retries must fit the 15s hook budget.
+    conn = sqlite3.connect(db, timeout=2)
+    try:
+        prior = _prior_leg_totals(conn, agent_id, row_id)
+    finally:
+        conn.close()
+    out = {}
+    for col, val in current.items():
+        if val is None:
+            out[col] = None
+            continue
+        p = prior.get(col) or 0
+        d = val - p
+        if d < 0:
+            d = 0
+        out[col] = round(d, 6) if col == "cost_usd" else d
+    return out
+
+
 def _compute_cost_usd(entry: dict, total_input, total_output, cache_create, cache_read) -> float:
     """Anthropic cost formula from a pricing-table entry (pure; mirrored by cast-recost-agent-runs._cost).
 
@@ -1333,6 +1388,8 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
     input_tokens = None
     output_tokens = None
     transcript_model = None
+    tool_uses_from_transcript = False  # payload tool count is per-leg: never delta it
+    transcript_totals = False  # True only when the columns below are cumulative transcript sums
 
     try:
         transcript_path = (transcript_path or "").strip()
@@ -1450,6 +1507,7 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     ctx.response_text = response_text
 
             if found_usage:
+                transcript_totals = True
                 input_tokens = total_input
                 output_tokens = total_output
                 # Transcript is authoritative for ALL token types — overrides payload values.
@@ -1463,6 +1521,7 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                 # content blocks are the only source. Mirrors the cache-token override above.
                 if total_tool_uses > 0:
                     tool_uses = total_tool_uses
+                    tool_uses_from_transcript = True
 
                 # F2: collect edited file paths and derive severity class.
                 ctx.edited_files = sorted(edited)
@@ -1541,6 +1600,29 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
     agent_id = ctx.agent_id
     files_val = json.dumps(ctx.edited_files) if ctx.edited_files else None
     file_class_val = ctx.file_class or None
+    # A SendMessage-resumed subagent keeps its agent_id and transcript and gets one
+    # agent_runs row per leg, so the transcript totals above are CUMULATIVE. Store
+    # only this leg's share so SUM() over the rows is not inflated.
+    if agent_id and transcript_totals:
+        try:
+            _cur = {
+                "cost_usd": cost_usd, "input_tokens": input_tokens,
+                "output_tokens": output_tokens, "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_create,
+            }
+            if tool_uses_from_transcript:
+                _cur["tool_uses"] = tool_uses
+            _leg = _leg_delta_values(db, agent_id, fast_row_id, _cur)
+            cost_usd = _leg["cost_usd"]
+            input_tokens = _leg["input_tokens"]
+            output_tokens = _leg["output_tokens"]
+            cache_read = _leg["cache_read_input_tokens"]
+            cache_create = _leg["cache_creation_input_tokens"]
+            tool_uses = _leg.get("tool_uses", tool_uses)
+        except Exception as _le:
+            # Fail open: keep the cumulative values rather than lose the row.
+            if log_hook_failure:
+                log_hook_failure("cast-subagent-stop-hook:prior_legs", -1, str(_le), sess)
     for attempt in range(3):
         try:
             conn = sqlite3.connect(db, timeout=5)

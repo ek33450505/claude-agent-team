@@ -1,5 +1,7 @@
 # Claude Code Native Tools Reference
 
+> Several names below come from internal source analysis and appear on no official page: `VerifyPlanExecutionTool`, `BriefTool`, `SleepTool`, `REPLTool`, `ScheduleCronTool` (the documented tools are `CronCreate`, `CronDelete`, `CronList` and `ScheduleWakeup`). `WorkflowTool` is documented as `Workflow`; hook handler types are `command`, `http`, `mcp_tool`, `prompt` and `agent`. Confirmed: `EnterPlanMode`/`ExitPlanMode`, `EnterWorktree`/`ExitWorktree`, `allowedHttpHookUrls`. The authoritative list is https://code.claude.com/docs/en/tools-reference (checked 2026-11-19).
+
 Confirmed native tools from Claude Code internal source analysis. CAST agents can list
 these in their `tools:` frontmatter to access them. Names are as confirmed.
 

@@ -6,7 +6,7 @@
     "MCP_CONNECTION_NONBLOCKING": "true",
     "CLAUDE_CODE_SCRIPT_CAPS": "100",
     "ATTEST_ENFORCE_AGENTS": "backend-writer,frontend-writer,bash-specialist",
-    "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION": "200",
+    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1",
     "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
   },
   "feedbackSurveyRate": 0,
@@ -533,7 +533,7 @@
   },
   "autoUpdatesChannel": "stable",
   "_permissions_warning": "REVIEW CAREFULLY: Bash/Write/Edit let Claude act without asking. Remove any you're not comfortable with.",
-  "_routing_note": "Model routing: haiku for commit/push/code-reviewer/test-runner. opus is the default (set in 16-model-defaults.json). CLAUDE_CODE_SUBAGENT_MODEL sets only the default subagent model (agent frontmatter model: and per-spawn models take precedence); set CLAUDE_CODE_SUBAGENT_MODEL_FORCE to override everything. Effort levels: see agent frontmatter.",
+  "_routing_note": "Model routing: haiku for commit/push/code-reviewer/test-runner. The main-loop default model is set in 16-model-defaults.json; a downstream-only personal fragment that sorts last (e.g. ~/.claude/managed-settings.d/90-personal-defaults.json, never in the repo) overrides it from the next install.sh merge; see docs/agents/AGENT-ROSTER.md. CLAUDE_CODE_SUBAGENT_MODEL sets only the default subagent model (agent frontmatter model: and per-spawn models take precedence); set CLAUDE_CODE_SUBAGENT_MODEL_FORCE to override everything. Effort levels: see agent frontmatter.",
   "teammateMode": "in-process",
   "_sandbox_note": "PARTIALLY LIVE (updated 2026-07-02, CC 2.1.195): filesystem denyRead DOES enforce in sessions where CC engages the Seatbelt sandbox \u2014 proven by EPERM on cast.db reads in a live interactive session (2026-07-02 doctor probe). Enforcement is session/permission-mode-dependent: explicitly-allowed and bypass-permissions commands run unsandboxed, so probes from autonomous sessions may observe no denial \u2014 verify from an interactive default-mode session. excludedCommands does NOT bypass filesystem.denyRead. filesystem.allowRead wins over denyRead: cast.db is allowlisted (Ed decision 2026-07-02) so cast status and /doctor read real data; history.jsonl, logs/**, and routing-log.jsonl stay denied. The egress PreToolUse hook (logs/egress.jsonl) remains the only live egress enforcement. Note: CC does not natively read managed-settings.d/; cast-merge-settings.sh merges this into ~/.claude/settings.json (user layer, not tamper-proof MDM). Verify ENFORCEMENT, not key-presence."
 }

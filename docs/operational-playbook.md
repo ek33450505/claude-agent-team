@@ -13,6 +13,10 @@
 - If the dirty banner appears, copy the listed files from the worktree path to the active branch, then `git worktree remove --force --force <path>`.
 - Always verify agent-reported file changes by reading the files after the agent completes.
 
+## Troubleshooting
+
+- `claude --safe-mode` (or `CLAUDE_CODE_SAFE_MODE=1`, Claude Code 2.1.169+) starts a session with CLAUDE.md, plugins, skills, hooks and MCP servers disabled, so you can tell whether a problem comes from CAST or from Claude Code. Note that it also disables CAST's guard hooks for that session.
+
 ## Multi-Terminal Coordination
 
 When running more than one terminal on the same repo simultaneously:

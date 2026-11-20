@@ -178,6 +178,13 @@ except Exception:
 if not prompt_text or len(prompt_text.strip()) < 10:
     raise SystemExit(0)
 
+# Slash commands (/skill, /cast ...) reach this hook unexpanded since CC 2.1.299;
+# FTS over command text yields no useful recall, so skip the router for them.
+# Command-shaped only: paths like /Users/... still get recall.
+import re as _re_slash
+if _re_slash.match(r'/[A-Za-z][\w:-]*(\s|$)', prompt_text.lstrip()):
+    raise SystemExit(0)
+
 router = os.environ.get("_CAST_ROUTER", "")
 
 if not os.path.isfile(router):
