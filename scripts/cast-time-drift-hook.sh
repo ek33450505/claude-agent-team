@@ -48,14 +48,19 @@ SESSION_ID="$(printf '%s' "$SESSION_ID" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-64)
 [[ -z "$SESSION_ID" ]] && SESSION_ID="default"
 
 STATE_FILE="${STATE_DIR}/${SESSION_ID}"
-NOW_EPOCH="$(date '+%s')"
-NOW_DATE="$(date '+%Y-%m-%d')"
+# One date fork for both values (epoch and date from the same instant).
+read -r NOW_EPOCH NOW_DATE <<<"$(date '+%s %Y-%m-%d')"
 
 # Prune state files older than 7 days so a long-lived install does not accrete.
-find "$STATE_DIR" -maxdepth 1 -type f -mtime +7 -exec rm -f {} \; 2>/dev/null || true
+# Runs only when a state file is (re)seeded (first prompt of a session), not on
+# every prompt: the find fork is pure overhead on the silent hot path.
+_prune_state() {
+  find "$STATE_DIR" -maxdepth 1 -type f -mtime +7 -exec rm -f {} \; 2>/dev/null || true
+}
 
 # First prompt of a session: SessionStart already injected. Seed and stay quiet.
 if [[ ! -f "$STATE_FILE" ]]; then
+  _prune_state
   printf '%s|%s|%s\n' "$NOW_EPOCH" "$NOW_EPOCH" "$NOW_DATE" > "$STATE_FILE" 2>/dev/null || true
   exit 0
 fi
@@ -63,6 +68,7 @@ fi
 IFS='|' read -r START_EPOCH LAST_EPOCH LAST_DATE < "$STATE_FILE" 2>/dev/null || true
 # A truncated or hand-edited state file must not wedge the hook.
 if [[ ! "$START_EPOCH" =~ ^[0-9]+$ || ! "$LAST_EPOCH" =~ ^[0-9]+$ || -z "$LAST_DATE" ]]; then
+  _prune_state
   printf '%s|%s|%s\n' "$NOW_EPOCH" "$NOW_EPOCH" "$NOW_DATE" > "$STATE_FILE" 2>/dev/null || true
   exit 0
 fi

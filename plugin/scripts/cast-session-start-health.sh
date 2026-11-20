@@ -169,6 +169,70 @@ if os.path.isfile(_checker):
     except Exception:
         _checker_bad = True
 
+
+# ── Concurrent children ───────────────────────────────────────────────────────
+# Perf (audit E1): the install-integrity checker (d), the stale-memory scanner (a) and the internals
+# canary (e) are independent, so they are STARTED here at once and COLLECTED later in the original
+# order (d, a, c, e). Each keeps its own deadline, measured from its spawn, so a slow child still
+# costs only its own budget. Spawn errors are held and re-raised at collect time, so every existing
+# except-branch below still sees exactly what it saw when these were serial subprocess.run calls.
+def _start(argv, budget, text=False):
+    try:
+        _p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=text)
+    except Exception as _e:
+        return (None, _e, 0.0)
+    return (_p, None, time.monotonic() + budget)
+
+
+def _finish(handle):
+    _p, _e, _dl = handle
+    if _e is not None:
+        raise _e
+    try:
+        _out, _ = _p.communicate(timeout=max(0.01, _dl - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        _p.kill()
+        _p.communicate()
+        raise
+    return subprocess.CompletedProcess(_p.args, _p.returncode, _out, None)
+
+
+_integ_h = None
+if os.path.isfile(_checker) and not _checker_bad:
+    _ib = max(0.8, min(2.0, 4.5 - (time.monotonic() - _T0)))
+    _integ_h = _start(
+        [sys._base_executable, "-I", _checker, "--json", "--home", home, "--incremental",
+         "--budget", "%.2f" % max(0.3, _ib - 0.35)], _ib)
+
+# Stale-memory scanner path: installed, then sibling (repo/CI), then CAST_REPO_DIR.
+_scanner = os.path.join(home, ".claude", "scripts", "cast-stale-memories.py")
+if not os.path.isfile(_scanner):
+    _sib = os.path.join(os.environ.get("CAST_HEALTH_SCRIPT_DIR", ""), "cast-stale-memories.py")
+    if _sib and os.path.isfile(_sib):
+        _scanner = _sib
+if not os.path.isfile(_scanner):
+    _repo = os.environ.get("CAST_REPO_DIR", "")
+    if _repo:
+        _scanner = os.path.join(_repo, "scripts", "cast-stale-memories.py")
+_scan_h = None
+if os.path.isfile(_scanner):
+    # -I: ignore PYTHONPATH/cwd so a planted module cannot run inside the scanner (it puts
+    # its own dir on sys.path before importing cast_memory_meta). 2s: keep the whole hook
+    # inside its 5s limit; on timeout the check is skipped silently (at collect).
+    _scan_h = _start([sys._base_executable, "-I", _scanner], 2, text=True)
+
+# Internals canary path: installed, then sibling. Budget <=1.0s; skipped if under 0.3s remains.
+_canary = os.path.join(home, ".claude", "scripts", "cast-internals-canary.py")
+if not os.path.isfile(_canary):
+    _csib = os.path.join(os.environ.get("CAST_HEALTH_SCRIPT_DIR", ""), "cast-internals-canary.py")
+    if os.environ.get("CAST_HEALTH_SCRIPT_DIR") and os.path.isfile(_csib):
+        _canary = _csib
+_cb = min(1.0, 4.6 - (time.monotonic() - _T0))
+_canary_h = None
+if os.path.isfile(_canary) and _cb >= 0.3:
+    _canary_h = _start([sys._base_executable, "-I", _canary, "--json", "--home", home], _cb)
+
 if not os.path.isfile(_checker):
     # No manifest AND no checker = a pre-manifest install; with a manifest it is a real gap.
     if os.path.lexists(os.path.join(home, ".claude", "install-manifest.sha256")):
@@ -181,12 +245,7 @@ elif _checker_bad:
     _log_integrity_error(integ_error)
 else:
     try:
-        _ib = max(0.8, min(2.0, 4.5 - (time.monotonic() - _T0)))
-        _ir = subprocess.run(
-            [sys._base_executable, "-I", _checker, "--json", "--home", home, "--incremental",
-             "--budget", "%.2f" % max(0.3, _ib - 0.35)],
-            capture_output=True, timeout=_ib, stdin=subprocess.DEVNULL,
-        )
+        _ir = _finish(_integ_h)
         if _ir.returncode not in (0, 1) or not _ir.stdout or len(_ir.stdout) > 65536:
             raise ValueError("checker exit/stdout shape")
         _ires = json.loads(_ir.stdout[:65536].decode("utf-8", "replace"))
@@ -214,28 +273,11 @@ else:
 # ── Stale memory detection ────────────────────────────────────────────────────
 # Canonical logic lives in cast-stale-memories.py (shared with bin/cast doctor).
 # Output format: line 1 = count, lines 2+ = filepath|verified_at|age_days
-_scanner = os.path.join(home, ".claude", "scripts", "cast-stale-memories.py")
-if not os.path.isfile(_scanner):
-    # Fall back to sibling in same directory (repo/CI context)
-    _sib = os.path.join(os.environ.get("CAST_HEALTH_SCRIPT_DIR", ""), "cast-stale-memories.py")
-    if _sib and os.path.isfile(_sib):
-        _scanner = _sib
-if not os.path.isfile(_scanner):
-    # Final fallback: explicit repo dir env var
-    _repo = os.environ.get("CAST_REPO_DIR", "")
-    if _repo:
-        _scanner = os.path.join(_repo, "scripts", "cast-stale-memories.py")
-
+# (path lookup and spawn happen up top, in "Concurrent children")
 stale_memories = []  # list of (display_name, age_days)
-if os.path.isfile(_scanner):
+if _scan_h is not None:
     try:
-        # -I: ignore PYTHONPATH/cwd so a planted module cannot run inside the scanner (it puts
-        # its own dir on sys.path before importing cast_memory_meta). timeout=2: keep the
-        # whole hook inside its 5s limit; on timeout the check is skipped silently (below).
-        result = subprocess.run(
-            [sys._base_executable, "-I", _scanner],
-            capture_output=True, text=True, timeout=2,
-        )
+        result = _finish(_scan_h)
         scanner_lines = result.stdout.splitlines()
         stale_count_raw = int(scanner_lines[0].strip()) if scanner_lines else 0
         for row in scanner_lines[1:]:
@@ -532,22 +574,14 @@ def _log_canary_error(label):
         pass
 
 
-_canary = os.path.join(home, ".claude", "scripts", "cast-internals-canary.py")
-if not os.path.isfile(_canary):
-    _csib = os.path.join(os.environ.get("CAST_HEALTH_SCRIPT_DIR", ""), "cast-internals-canary.py")
-    if os.environ.get("CAST_HEALTH_SCRIPT_DIR") and os.path.isfile(_csib):
-        _canary = _csib
-_cb = min(1.0, 4.6 - (time.monotonic() - _T0))
+# (path lookup, budget and spawn happen up top, in "Concurrent children")
 if not os.path.isfile(_canary):
     _log_canary_error("not installed")
-elif _cb < 0.3:
+elif _canary_h is None:
     _log_canary_error("skipped: no budget")
 else:
     try:
-        _cr = subprocess.run(
-            [sys._base_executable, "-I", _canary, "--json", "--home", home],
-            capture_output=True, timeout=_cb, stdin=subprocess.DEVNULL,
-        )
+        _cr = _finish(_canary_h)
         if _cr.returncode not in (0, 1) or not _cr.stdout or len(_cr.stdout) > 65536:
             raise ValueError("canary exit/stdout shape")
         _cres = json.loads(_cr.stdout[:65536].decode("utf-8", "replace"))
