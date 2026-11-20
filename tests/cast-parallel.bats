@@ -209,5 +209,5 @@ _resolve_parallel_logs() {
   mkdir -p "$HOME/.claude/logs"; chmod 755 "$HOME/.claude/logs"
   _resolve_parallel_logs
   [ "$LOG_A" = "$HOME/.claude/logs/cast-parallel-p1-stream-a.log" ]
-  [ "$(stat -f %Lp "$HOME/.claude/logs" 2>/dev/null || stat -c %a "$HOME/.claude/logs")" = "755" ]
+  [ "$(file_mode "$HOME/.claude/logs")" = "755" ]
 }
