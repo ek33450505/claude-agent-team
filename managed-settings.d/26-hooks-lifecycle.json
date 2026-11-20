@@ -21,6 +21,19 @@
           }
         ]
       }
+    ],
+    "PostModelSwitch": [
+      {
+        "id": "cast-model-switch-recorder",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-model-switch-hook.sh",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
     ]
   }
 }

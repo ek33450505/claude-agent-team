@@ -46,7 +46,7 @@ no-op or error on older builds.
 | `UserPromptSubmit` before slash expansion | v2.1.299 | Hooks see the raw `/command` text; CAST's memory recall skips command-shaped prompts (CC changelog 2.1.299) |
 | `OTEL_*` not inherited by hooks/Bash | v2.1.128 | OTel export is configured only through user-scope env (`12-otel.json`, written by `scripts/cast-otel.sh enable`) (CC changelog 2.1.128) |
 | Subagents run in background by default | v2.1.198 | Extended to all non-teammate spawns in 2.1.232; the dispatching session verifies the diff on disk before reading a verdict (CC changelog 2.1.198, 2.1.232) |
-| `PostModelSwitch` / `PreModelSwitch` hook events | v2.1.251 | Available; not yet used by CAST (CC changelog 2.1.251) |
+| `PostModelSwitch` / `PreModelSwitch` hook events | v2.1.251 | CAST records `PostModelSwitch` via `cast-model-switch-hook.sh`; `PreModelSwitch` unused (CC changelog 2.1.251) |
 
 ---
 

@@ -198,6 +198,19 @@
         ]
       }
     ],
+    "PostModelSwitch": [
+      {
+        "id": "cast-model-switch-recorder",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-model-switch-hook.sh\"",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "id": "cast-journal-session-end",
