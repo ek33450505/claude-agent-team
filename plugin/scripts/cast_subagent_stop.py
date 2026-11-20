@@ -484,6 +484,26 @@ def _find_subagent_artifact(ctx, suffix: str) -> str:
     return next(iter(candidates)) if len(candidates) == 1 else ""
 
 
+def _open_nofollow_regular(path: str) -> int:
+    """fd for ``path`` opened O_NOFOLLOW and verified a regular file, or -1.
+
+    Same pattern as the roster/handback readers: a planted leaf symlink or a
+    FIFO/device is refused and behaves as "no file". Caller owns the fd.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return -1
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return -1
+    except OSError:
+        os.close(fd)
+        return -1
+    return fd
+
+
 def _resolve_roster_type(ctx) -> str:
     """Trusted roster type for this SubagentStop, read from Claude Code's sidecar.
 
@@ -1257,16 +1277,12 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
 
     # Resolve transcript path (in-process glob, hook lines 328-338).
     transcript_path = ""
-    if ctx.agent_id and ctx.session_id:
-        pattern = os.path.expanduser(
-            f"~/.claude/projects/*/{ctx.session_id}/subagents/**/agent-{ctx.agent_id}.jsonl"
-        )
-        try:
-            matches = glob.glob(pattern, recursive=True)
-            if matches:
-                transcript_path = max(matches, key=os.path.getmtime)
-        except Exception:
-            transcript_path = ""
+    # Shared validated lookup: ids checked as plain tokens, two known layouts only,
+    # exactly one candidate or "" (no newest-mtime pick a planted copy could win).
+    try:
+        transcript_path = _find_subagent_artifact(ctx, ".jsonl")
+    except Exception:
+        transcript_path = ""
 
     # Lineage (SEC-2 residual). Claude Code writes an agent-<id>.meta.json sidecar
     # beside every subagent transcript, and it carries what the HOOK PAYLOAD does
@@ -1281,9 +1297,15 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
     if transcript_path:
         meta_path = transcript_path[:-len(".jsonl")] + ".meta.json" if transcript_path.endswith(".jsonl") else ""
         try:
-            if meta_path and os.path.isfile(meta_path):
-                with open(meta_path, "r", encoding="utf-8") as _mf:
-                    _meta = json.load(_mf)
+            _mfd = _open_nofollow_regular(meta_path) if meta_path else -1
+            if _mfd >= 0:
+                try:
+                    _mraw = os.read(_mfd, _META_MAX_BYTES + 1)
+                finally:
+                    os.close(_mfd)
+                if len(_mraw) > _META_MAX_BYTES:
+                    raise ValueError("meta sidecar oversized")
+                _meta = json.loads(_mraw.decode("utf-8"))
                 _sd = _meta.get("spawnDepth")
                 spawn_depth = int(_sd) if isinstance(_sd, (int, float)) else None
                 _pa = _meta.get("parentAgentId")
@@ -1318,13 +1340,12 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
             _max_bytes = int(os.environ.get("CAST_TRANSCRIPT_MAX_BYTES", "20971520") or "20971520")
         except (ValueError, TypeError):
             _max_bytes = 20971520
-        _transcript_size = (
-            os.path.getsize(transcript_path)
-            if transcript_path and os.path.isfile(transcript_path)
-            else 0
-        )
+        _tfd = _open_nofollow_regular(transcript_path) if transcript_path else -1
+        _transcript_size = os.fstat(_tfd).st_size if _tfd >= 0 else 0
         _transcript_oversized = _transcript_size > _max_bytes
         if _transcript_oversized:
+            os.close(_tfd)
+            _tfd = -1
             # Oversized transcript — SKIP the full line-by-line read. This hook is async
             # with a hard timeout; iterating a multi-MB .jsonl risks a kill mid-read that
             # strands the row 'running'. Fall back to the payload's cache tokens (already
@@ -1339,7 +1360,7 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     f"(payload cache tokens only): {transcript_path}",
                     sess,
                 )
-        elif transcript_path and os.path.isfile(transcript_path):
+        elif _tfd >= 0:
             total_input = 0
             total_output = 0
             total_cache_read = 0
@@ -1352,7 +1373,8 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
             _recov_text = ""
             _recov_tool = None
 
-            with open(transcript_path, "r", errors="replace") as f:
+            _fd, _tfd = _tfd, -1  # fdopen takes ownership of the fd
+            with os.fdopen(_fd, "r", errors="replace") as f:
                 for raw_line in f:
                     raw_line = raw_line.strip()
                     if not raw_line:
@@ -3317,6 +3339,17 @@ def stage16_compressed_output(ctx: Ctx) -> None:
     sys.stdout.write(json.dumps(output) + "\n")
 
 
+_LINE_BREAKS = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"  # every code point str.splitlines() splits on
+
+
+def _one_line(value) -> str:
+    """Replace every line-break code point with a space so a value can never shift
+    lines under the wrapper's line-based sentinel scan (a quoted multi-line value
+    could otherwise carry a bare ``__CAST_TAIL_END__`` line). Defence in depth
+    beyond shlex.quote."""
+    return str(value or "").translate({ord(c): " " for c in _LINE_BREAKS})
+
+
 # ── Stage 17: tail-var emission for the bash wrapper ─────────────────────────
 def _emit_tail(ctx: Ctx, *, include_successors: bool) -> None:
     """Write the sentinel-delimited, shlex-quoted tail block for the bash wrapper.
@@ -3336,18 +3369,18 @@ def _emit_tail(ctx: Ctx, *, include_successors: bool) -> None:
     """
     lines = [
         "__CAST_TAIL_BEGIN__",
-        "CAST_GATE_MATCH=" + shlex.quote(ctx.gate_match or ""),
+        "CAST_GATE_MATCH=" + shlex.quote(_one_line(ctx.gate_match)),
     ]
     if ctx.gate_reason:
         # Only when a fail-closed BLOCKED was synthesized (fixed string, never agent text);
         # the wrapper records it as the gate record's `concerns`.
-        lines.append("CAST_GATE_REASON=" + shlex.quote(ctx.gate_reason))
+        lines.append("CAST_GATE_REASON=" + shlex.quote(_one_line(ctx.gate_reason)))
     if include_successors:
-        lines.append("CAST_SUCCESSORS=" + shlex.quote("\n".join(ctx.successors)))
+        lines.append("CAST_SUCCESSORS=" + shlex.quote("\n".join(_one_line(x) for x in ctx.successors)))
     lines += [
-        "SAFE_AGENT=" + shlex.quote(ctx.safe_agent or ""),
-        "SAFE_SESSION_ID=" + shlex.quote(ctx.safe_session_id or ""),
-        "SAFE_ROSTER_TYPE=" + shlex.quote(ctx.roster_type or ""),
+        "SAFE_AGENT=" + shlex.quote(_one_line(ctx.safe_agent)),
+        "SAFE_SESSION_ID=" + shlex.quote(_one_line(ctx.safe_session_id)),
+        "SAFE_ROSTER_TYPE=" + shlex.quote(_one_line(ctx.roster_type)),
         "__CAST_TAIL_END__",
     ]
     sys.stdout.write("\n".join(lines) + "\n")
