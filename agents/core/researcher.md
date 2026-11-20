@@ -54,8 +54,8 @@ Produce a structured summary of what you found.
 
 ### Technology Research
 Evaluate libraries, frameworks, or approaches. Use WebFetch and WebSearch for live data
-(npm registry, GitHub, official docs). Your knowledge cutoff is August 2025 — live data
-takes precedence over internal knowledge.
+(npm registry, GitHub, official docs). Live data takes precedence over internal knowledge
+for versions, prices, and release status.
 
 ```bash
 # Check package health

@@ -52,16 +52,13 @@ Create one TaskCreate entry per batch (subject = "Batch N: [description]"). The 
 
 ## Step 2.5 — Branch Pre-Flight
 
-Read `target_branch` from the manifest JSON (parsed in Step 2), then:
+Read `target_branch` from the manifest JSON (parsed in Step 2). `target_branch` is required; if absent, BLOCK and stop. Then:
 ```bash
 CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-TODAY=$(date +%Y%m%d); CUTOVER=20260603
 ```
 
-**Case 1** — `target_branch` absent AND today < CUTOVER: warn `[CAST-ORCHESTRATE] DEPRECATION WARNING: omits target_branch. Plans without target_branch will fail from 2026-06-03.` Log and proceed.
-**Case 2** — `target_branch` absent AND today ≥ CUTOVER: BLOCK. `target_branch` is required in the manifest (enforced since 2026-06-03). Stop.
-**Case 3** — `target_branch` matches current branch: log `[CAST-ORCHESTRATE] Branch check passed: $CURRENT_BRANCH` and continue.
-**Case 4** — `target_branch` present but branch mismatch: print current vs target, stop and wait for explicit "y"/"yes" before proceeding to Step 3. Prevents C3-on-C2-branch errors.
+**Case 1** — `target_branch` matches current branch: log `[CAST-ORCHESTRATE] Branch check passed: $CURRENT_BRANCH` and continue.
+**Case 2** — `target_branch` present but branch mismatch: print current vs target, stop and wait for explicit "y"/"yes" before proceeding to Step 3. Prevents C3-on-C2-branch errors.
 
 ## Step 3 — Present the Queue
 

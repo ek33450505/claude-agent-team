@@ -33,7 +33,6 @@ evals/
       silent-truncation-no-status-tail.yaml
     backend-writer/
       backend-writer-hallucination-claimed-file-write.yaml
-  README.md
 # grader helper scripts live at scripts/eval-graders/ (not under evals/)
 ```
 

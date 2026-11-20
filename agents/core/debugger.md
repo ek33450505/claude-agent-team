@@ -5,7 +5,6 @@ description: >
 tools: Read, Edit, Bash, Grep, Glob
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────
-# effort field is N/A on sonnet — only Opus reads it
 maxTurns: 50
 skills: [cast-conventions, typescript-conventions, python-conventions]
 ---

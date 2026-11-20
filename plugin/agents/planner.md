@@ -9,7 +9,7 @@ description: >
 tools: Read, Write, Glob, Grep
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────
-# effort field is N/A on sonnet — only Opus reads it
+# effort: not set; set one only after confirming this model reads it
 maxTurns: 20
 disallowedTools: Bash
 skills: [cast-conventions, stack-reference, agent-registry]
@@ -219,7 +219,7 @@ Then tell the user:
 
 When invoked with context like "review task board for plan X" or "how is plan X going":
 
-1. Read `~/.claude/task-board.json` to get the current state of all tasks.
+1. Use the task-state summary (statuses, concerns, blockers) the dispatching session passes in the prompt; if none is given, return NEEDS_CONTEXT asking for it.
 2. Read the original plan file to retrieve the acceptance criteria and task list.
 3. Compare task states in the task board against each plan task and its acceptance criteria.
 4. Flag any tasks with status `DONE_WITH_CONCERNS` — list the concern and the batch it came from.

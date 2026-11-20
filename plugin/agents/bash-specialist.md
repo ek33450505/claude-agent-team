@@ -45,7 +45,7 @@ This rule exists because bash-specialist edits during parallel agent batches hav
 | Script | Hook Event | Exit Codes | Purpose |
 |---|---|---|---|
 | `post-tool-hook.sh` | PostToolUse (Write\|Edit) | 0=allow | Auto-format + inject [CAST-REVIEW] directive |
-| `pre-tool-guard.sh` | PreToolUse (Bash) | 0=allow, 2=hard block | Block raw git commit/push |
+| `cast-pretool-dispatch.py` | PreToolUse (Bash) | 0=allow, 2=hard block | Wired in `managed-settings.d/25-hooks-security.json`; imports `cast-git-guard.py` in-process. `pre-tool-guard.sh` is only a CLI/test wrapper |
 
 ### Exit Code Convention
 - `exit 0` — allow the operation to proceed
@@ -125,8 +125,7 @@ CAST_PROMPT="$PROMPT" python3 -c "..."
 4. **Read stdin once** with `INPUT="$(cat)"`
 5. **Extract needed fields** with python3 inline, `2>/dev/null || echo ""` fallback
 6. **Implement logic** with explicit exit codes
-7. **Add to settings.local.json** under the correct hook event with appropriate matcher
-8. **Copy to repo** at `scripts/` for version control
+7. Write the script in the repo's `scripts/` (install.sh deploys it to `~/.claude/scripts`; never edit the runtime copy) and wire it by adding a hook entry to the matching `managed-settings.d/*-hooks-*.json` fragment.
 
 ## Workflow: Debugging a Hook
 
@@ -134,25 +133,18 @@ CAST_PROMPT="$PROMPT" python3 -c "..."
 # Test with synthetic input
 echo '{"tool_input":{"command":"git commit -m test"}}' | bash ~/.claude/scripts/pre-tool-guard.sh
 
-# Check hook wiring in settings
-cat ~/.claude/settings.local.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get('hooks',{}), indent=2))"
+# Check SOURCE intent (repo fragments)
+python3 -c "import sys,json; [print(f, json.dumps(json.load(open(f)).get('hooks',{}), indent=2)) for f in sys.argv[1:]]" managed-settings.d/*-hooks-*.json
+
+# Check what is LIVE (prints only the PreToolUse hooks block)
+python3 -c "import json,os;print(json.dumps(json.load(open(os.path.expanduser('~/.claude/settings.json'))).get('hooks',{}).get('PreToolUse'),indent=1))"
 ```
 
 ## Workflow: Adding a New Blocked Command
 
-1. Add pattern check in `pre-tool-guard.sh` following the escape-hatch-first pattern:
-```bash
-# Allow escape hatch (anchored env prefix only)
-if echo "$CMD" | grep -qE "^NEW_ESCAPE=1[[:space:]]+target[[:space:]]+command"; then
-  exit 0
-fi
-# Block the command
-if echo "$CMD" | grep -qE "(^|[[:space:]])target[[:space:]]+command"; then
-  echo "**[CAST]** \`target command\` blocked. [Reason and alternative]."
-  exit 2
-fi
-```
-2. Document the escape hatch in the script header comment.
+1. Add the pattern to `scripts/cast-git-guard.py` (the single source for git blocks; `scripts/pre-tool-guard.sh` is only a wrapper). Put the escape-hatch allow check before the block, anchored to the start of the command segment, and give the block message a reason and an alternative.
+Implement it in Python inside `scripts/cast-git-guard.py`, mirroring the existing segment-anchored allow regex for the CAST_COMMIT_AGENT hatch (line 697: match `(^|&&\s*)` at the start of a command segment, not just `^`), and fail closed.
+2. Document the escape hatch in the guard's header comment and add a case to `tests/pre-tool-guard.bats`.
 
 ## BATS Testing
 
@@ -191,8 +183,8 @@ Some failures only reproduce on the GitHub Actions runner, never locally. When a
 | File | Path |
 |---|---|
 | Post-tool hook | `~/.claude/scripts/post-tool-hook.sh` |
-| Pre-tool guard | `~/.claude/scripts/pre-tool-guard.sh` |
-| Settings | `~/.claude/settings.local.json` |
+| Pre-tool hook | `~/.claude/scripts/cast-pretool-dispatch.py` -> `scripts/cast-git-guard.py` (`pre-tool-guard.sh` = CLI/test wrapper) |
+| Hook wiring | `managed-settings.d/*-hooks-*.json` |
 | Repo scripts | `~/Projects/personal/claude-agent-team/scripts/` |
 
 ## CAST Script Conventions
