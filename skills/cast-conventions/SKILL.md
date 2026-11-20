@@ -99,8 +99,7 @@ CAST's guards blocked CAST's own agents 676 times in 31 days (about 52 a day in 
 
 ## Code Review Requirement
 
-- MANDATORY: Invoke `code-reviewer` (haiku) after every logical unit of changes.
-- Do NOT proceed to the next logical unit until code-reviewer returns `Status: DONE` or `Status: DONE_WITH_CONCERNS`.
+- Every logical unit of change is reviewed by `code-reviewer` before it is committed or built on. The dispatching session runs that gate (see Error Routing); finish the unit, report Status, and stop.
 
 ## Status File
 

@@ -5,7 +5,7 @@ description: >
   Use when writing new hook scripts, BATS test suites, reviewing shell code for correctness,
   debugging hook behavior, or extending CAST automation. Knows CAST-specific conventions:
   exit codes, escape hatches, hookSpecificOutput JSON format, and CLAUDE_SUBPROCESS guard patterns.
-tools: Read, Edit, Write, Bash, Grep, Glob, Agent
+tools: Read, Edit, Write, Bash, Grep, Glob
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 30
@@ -45,7 +45,7 @@ This rule exists because bash-specialist edits during parallel agent batches hav
 | Script | Hook Event | Exit Codes | Purpose |
 |---|---|---|---|
 | `post-tool-hook.sh` | PostToolUse (Write\|Edit) | 0=allow | Auto-format + inject [CAST-REVIEW] directive |
-| `pre-tool-guard.sh` | PreToolUse (Bash) | 0=allow, 2=hard block | Block raw git commit/push |
+| `cast-pretool-dispatch.py` | PreToolUse (Bash) | 0=allow, 2=hard block | Wired in `managed-settings.d/25-hooks-security.json`; imports `cast-git-guard.py` in-process. `pre-tool-guard.sh` is only a CLI/test wrapper |
 
 ### Exit Code Convention
 - `exit 0` — allow the operation to proceed
@@ -125,8 +125,7 @@ CAST_PROMPT="$PROMPT" python3 -c "..."
 4. **Read stdin once** with `INPUT="$(cat)"`
 5. **Extract needed fields** with python3 inline, `2>/dev/null || echo ""` fallback
 6. **Implement logic** with explicit exit codes
-7. **Add to settings.local.json** under the correct hook event with appropriate matcher
-8. **Copy to repo** at `scripts/` for version control
+7. Write the script in the repo's `scripts/` (install.sh deploys it to `~/.claude/scripts`; never edit the runtime copy) and wire it by adding a hook entry to the matching `managed-settings.d/*-hooks-*.json` fragment.
 
 ## Workflow: Debugging a Hook
 
@@ -134,25 +133,18 @@ CAST_PROMPT="$PROMPT" python3 -c "..."
 # Test with synthetic input
 echo '{"tool_input":{"command":"git commit -m test"}}' | bash ~/.claude/scripts/pre-tool-guard.sh
 
-# Check hook wiring in settings
-cat ~/.claude/settings.local.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get('hooks',{}), indent=2))"
+# Check SOURCE intent (repo fragments)
+python3 -c "import sys,json; [print(f, json.dumps(json.load(open(f)).get('hooks',{}), indent=2)) for f in sys.argv[1:]]" managed-settings.d/*-hooks-*.json
+
+# Check what is LIVE (prints only the PreToolUse hooks block)
+python3 -c "import json,os;print(json.dumps(json.load(open(os.path.expanduser('~/.claude/settings.json'))).get('hooks',{}).get('PreToolUse'),indent=1))"
 ```
 
 ## Workflow: Adding a New Blocked Command
 
-1. Add pattern check in `pre-tool-guard.sh` following the escape-hatch-first pattern:
-```bash
-# Allow escape hatch (anchored env prefix only)
-if echo "$CMD" | grep -qE "^NEW_ESCAPE=1[[:space:]]+target[[:space:]]+command"; then
-  exit 0
-fi
-# Block the command
-if echo "$CMD" | grep -qE "(^|[[:space:]])target[[:space:]]+command"; then
-  echo "**[CAST]** \`target command\` blocked. [Reason and alternative]."
-  exit 2
-fi
-```
-2. Document the escape hatch in the script header comment.
+1. Add the pattern to `scripts/cast-git-guard.py` (the single source for git blocks; `scripts/pre-tool-guard.sh` is only a wrapper). Put the escape-hatch allow check before the block, anchored to the start of the command segment, and give the block message a reason and an alternative.
+Implement it in Python inside `scripts/cast-git-guard.py`, mirroring the existing segment-anchored allow regex for the CAST_COMMIT_AGENT hatch (line 697: match `(^|&&\s*)` at the start of a command segment, not just `^`), and fail closed.
+2. Document the escape hatch in the guard's header comment and add a case to `tests/pre-tool-guard.bats`.
 
 ## BATS Testing
 
@@ -191,8 +183,8 @@ Some failures only reproduce on the GitHub Actions runner, never locally. When a
 | File | Path |
 |---|---|
 | Post-tool hook | `~/.claude/scripts/post-tool-hook.sh` |
-| Pre-tool guard | `~/.claude/scripts/pre-tool-guard.sh` |
-| Settings | `~/.claude/settings.local.json` |
+| Pre-tool hook | `~/.claude/scripts/cast-pretool-dispatch.py` -> `scripts/cast-git-guard.py` (`pre-tool-guard.sh` = CLI/test wrapper) |
+| Hook wiring | `managed-settings.d/*-hooks-*.json` |
 | Repo scripts | `~/Projects/personal/claude-agent-team/scripts/` |
 
 ## CAST Script Conventions
@@ -218,19 +210,8 @@ status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: [describe if BLOCKED, else "none"]
 ```
 
-## Code Review (MANDATORY)
-
-**Dispatch-override precedence (read before this section's self-dispatch).** If your dispatch prompt explicitly tells you NOT to self-dispatch `code-reviewer` (e.g. "do not self-dispatch code-reviewer", "the orchestrator will run the review gate"), HONOR it: skip the self-dispatch below, leave your changes in the working tree, do NOT dispatch `commit` (see Final Step) unless separately told to, and return `Status: DONE` (or `DONE_WITH_CONCERNS`) with a `## Recommended Next Agents` note naming the review that still needs to run. A per-dispatch override SUPERSEDES this definition's default mandatory-self-dispatch chain — it is the same case as the existing plan-based/ADM exception (an orchestrator that runs the gate itself).
-
-After writing or modifying any production shell or BATS code, self-dispatch `code-reviewer` via the Agent tool before reporting DONE (subject to the Dispatch-override precedence above — skip this if your dispatch says the orchestrator will review). Do NOT proceed to commit until code-reviewer returns `Status: DONE` or `Status: DONE_WITH_CONCERNS`.
-
-If the Agent tool dispatch fails at this nesting depth (e.g., max nesting), do NOT narrate a review that did not happen. Instead return `Status: DONE_WITH_CONCERNS` noting the dispatch failure explicitly, so the orchestrating session can dispatch code-reviewer.
-
-## Final Step (MANDATORY)
-
-After all scripts are written and reviewed (subject to the Dispatch-override precedence above — skip if your dispatch says not to commit), dispatch `commit` via Agent tool:
-> "Create a semantic commit for the shell scripts added/modified: [file list and purpose]."
-Do NOT return to the calling session before dispatching commit.
+## Review and commit
+Leave changes in the working tree and report DONE with a `## Recommended Next Agents` section (code-reviewer, then commit). The dispatching session runs both.
 
 ## Output Discipline
 

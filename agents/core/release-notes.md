@@ -3,7 +3,7 @@ name: release-notes
 description: >
   Release notes generator. Creates structured changelogs from git commits,
   resolved issues, and breaking changes between two refs. Groups by category.
-tools: Read, Write, Bash, Glob, Grep, Agent
+tools: Read, Write, Bash, Glob, Grep
 model: haiku
 # ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 15
@@ -60,9 +60,7 @@ You are a release notes generator. You create structured changelogs from git his
    - Prepend to `CHANGELOG.md` if it exists, or create it
    - Or write to specified output path
 
-7. **Commit** — Self-dispatch `commit` agent with message `docs: update changelog for [version]`.
-
-   If the Agent tool dispatch fails at this nesting depth (e.g., max nesting), do NOT narrate a commit that did not happen. Instead return `Status: DONE_WITH_CONCERNS` noting the dispatch failure explicitly, and leave changes in the working tree, so the orchestrating session can dispatch `commit`.
+7. **Hand off** — Leave the changelog in the working tree and return `Recommended Next Agents: commit`; the dispatching session commits.
 
 ## Output caps
 

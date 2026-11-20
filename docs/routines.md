@@ -4,7 +4,7 @@ Routines are **time-triggered or event-triggered autonomous agent jobs** that ru
 
 ## What Routines Solve
 
-Interactive agents (e.g., `/plan`, `/debug`, `/test`) are best for in-session problem-solving where you provide context and feedback in real-time. Routines fill the gap: **tasks that should run daily or weekly without asking**, like:
+Interactive agents (e.g., `/plan`, `/debug`, `test-writer`) are best for in-session problem-solving where you provide context and feedback in real-time. Routines fill the gap: **tasks that should run daily or weekly without asking**, like:
 
 - Morning briefings summarizing overnight activity
 - Email and task inbox triage

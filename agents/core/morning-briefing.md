@@ -84,11 +84,11 @@ Collect the output as a markdown fragment titled `## Weather — Upper Arlington
 1. **git-activity** — Scan project repos for yesterday's commits (cross-platform)
 2. **action-items** — Grep meeting notes and TODOs for open checkboxes (cross-platform)
 
-### Step 4: CAST system intelligence
+### Step 4: CAST system intelligence (items 4a-4e)
 
 Run these bash queries to enrich the briefing:
 
-**3a. Dirty repo detector** — find repos with uncommitted or unpushed work:
+**4a. Dirty repo detector** — find repos with uncommitted or unpushed work:
 ```bash
 for dir in ~/Projects/personal ~/Projects/work; do
   find "$dir" -maxdepth 2 -name ".git" -type d 2>/dev/null | while read gitdir; do
@@ -102,13 +102,13 @@ for dir in ~/Projects/personal ~/Projects/work; do
 done
 ```
 
-**3b. Open PR digest** — list open PRs across repos:
+**4b. Open PR digest** — list open PRs across repos:
 ```bash
 gh pr list --author "@me" --state open --json title,repository,url,createdAt \
   --jq '.[] | "• \(.title) [\(.repository.name)] — \(.url)"' 2>/dev/null | head -10
 ```
 
-**3c. Yesterday's CAST spend** — query cast.db:
+**4c. Yesterday's CAST spend** — query cast.db:
 ```bash
 sqlite3 ~/.claude/cast.db \
   "SELECT printf('Runs: %d | Tokens: %d | Cost: $%.4f',
@@ -117,7 +117,7 @@ sqlite3 ~/.claude/cast.db \
    WHERE DATE(started_at) = DATE('now', '-1 day');" 2>/dev/null
 ```
 
-**3d. Unresolved BLOCKED agents** — any stuck tasks:
+**4d. Unresolved BLOCKED agents** — any stuck tasks:
 ```bash
 sqlite3 ~/.claude/cast.db \
   "SELECT agent || ': ' || COALESCE(task,'no detail')
@@ -126,26 +126,12 @@ sqlite3 ~/.claude/cast.db \
    LIMIT 5;" 2>/dev/null
 ```
 
-**3e. Open incidents** — surface unresolved incidents from cast.db:
+**4e. Open incidents** — surface unresolved incidents from cast.db:
 ```bash
 cast incidents recent 3 --status=open --json 2>/dev/null || true
 ```
 
 If the command returns a non-empty JSON array, include an **Open Incidents** section in the briefing listing each incident as: `occurred_at — problem_summary` (truncated to 100 chars). If the output is empty, the exit code is non-zero, or the array has no entries, omit the section entirely — do not render an empty heading.
-
-**3f. Security gate activity (parry-guard)** — check if today's rejection log exists:
-```bash
-PARRY_LOG="$HOME/.claude/logs/parry-guard-daily-$(date +%Y-%m-%d).log"
-if [ -f "$PARRY_LOG" ]; then
-  echo "## Security Gate Activity (parry-guard)"
-  echo ""
-  grep "^  •" "$PARRY_LOG" | head -20
-  echo ""
-  grep -i "false positive" "$PARRY_LOG" && echo "" || true
-fi
-```
-
-If today's parry-guard log exists, extract rejection counts by tool and flag any tool with ≥3 rejections as `[POSSIBLE FALSE POSITIVE — REVIEW RECOMMENDED]`.
 
 Collect all output from Step 4 as a single markdown fragment titled `## CAST Intelligence`.
 
@@ -159,7 +145,7 @@ the final briefing file at:
 
 After writing the briefing file to disk, if the `CAST_FILES_API=1` environment variable is set:
 ```bash
-scripts/cast-files-api.sh upload ~/.claude/briefings/YYYY-MM-DD-morning.md --purpose "assistants"
+bash ~/.claude/scripts/cast-files-api.sh upload ~/.claude/briefings/YYYY-MM-DD-morning.md --purpose "assistants"
 ```
 The upload returns a JSON response with `file_id`. Include this `file_id` in your Status block instead of pasting the briefing file inline.
 

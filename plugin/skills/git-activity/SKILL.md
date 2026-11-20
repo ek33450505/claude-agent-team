@@ -18,7 +18,7 @@ Sourced from `~/.claude/config.sh`. Edit that file to add or remove projects.
 1. Run the following script:
 
 ```bash
-source ~/.claude/config.sh
+source ~/.claude/config.sh || { echo "~/.claude/config.sh missing: define PROJECTS=(...)"; exit 1; }
 for dir in "${PROJECTS[@]}"; do
   if [ -d "$dir/.git" ]; then
     count=$(git -C "$dir" log --since="yesterday" --oneline 2>/dev/null | wc -l | tr -d ' ')

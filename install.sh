@@ -630,6 +630,12 @@ rm -f "$CLAUDE_DIR/scripts/cast-session-distiller.py" "$CLAUDE_DIR/scripts/cast-
 rm -f "$CLAUDE_DIR/scripts/cast-board.sh" "$CLAUDE_DIR/scripts/cast-command-guard.sh" "$CLAUDE_DIR/scripts/cast-compat.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-cwdchanged-hook.sh" "$CLAUDE_DIR/scripts/cast-filechanged-hook.sh" "$CLAUDE_DIR/scripts/cast-headless-guard.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-instructions-loaded-hook.sh" "$CLAUDE_DIR/scripts/cast-post-compact-hook.sh" "$CLAUDE_DIR/scripts/cast-stats.sh"
+# Remove the cast exec plan executor retired in v10.8.0 (never used; /orchestrate replaces it)
+rm -f "$CLAUDE_DIR/scripts/cast-exec.sh"
+# Remove commands/skills retired or renamed in v10.8.0 (/doctor -> /cast-doctor; zero-use and duplicate wrappers)
+rm -f "$CLAUDE_DIR/commands/doctor.md" "$CLAUDE_DIR/commands/feature.md" "$CLAUDE_DIR/commands/secure.md" "$CLAUDE_DIR/commands/test.md"
+rm -f "$CLAUDE_DIR/commands/laconic.md" "$CLAUDE_DIR/commands/merge.md" "$CLAUDE_DIR/commands/orchestrate.md" "$CLAUDE_DIR/commands/plan.md"
+rm -rf "$CLAUDE_DIR/skills/careful-mode" "$CLAUDE_DIR/skills/freeze-mode" "$CLAUDE_DIR/skills/wizard" "$CLAUDE_DIR/skills/ship"
 # v7.5 Phase 7: removed dead reference skills
 rm -rf "$CLAUDE_DIR/skills/compact-discipline" "$CLAUDE_DIR/skills/thinking-budget"
 # Remove config retired in v7.5 Phase 6b (config-rot sweep, #152)
@@ -681,77 +687,31 @@ trap - EXIT INT TERM HUP
 unset _db_init_err _db_init_ok _db_init_try _db_init_line
 
 # --- Install managed-settings.d fragments ---
-# Policy: CAST-owned fragments overwrite — they ship behavior changes that must reach the
-# deployed copy. CAST-owned set: *-hooks-*.json (hook wiring), 50-mcp.json (MCP server
-# list; managed to propagate removals such as the github-MCP drop), 11-deny.json
-# (categorical security-enforcement deny rules for model cap + destructive Bash patterns;
-# must reach existing installs on reinstall), and 61-sandbox.json (sandbox/security
-# enforcement config — network allowlist, filesystem denyRead/allowRead, credentials deny;
-# must reach existing installs on reinstall: 2026-07-02 allowRead change failed to deploy
-# while sandbox lived in skip-if-exists 60-meta). User MCP servers belong in ~/.claude.json
-# (user/project scope), NOT in the managed fragment. 12-ask.json (ask-gate enforcement —
-# permission prompts before destructive/credential tool calls; sibling of 11-deny; a
-# 2026-10-03 Neon ask-list change failed to deploy while it was skip-if-exists).
-# 05-behavior.json (carries sandbox.failIfUnavailable) and 10-permissions.json are
-# enforcement fragments too: a repo fix to them otherwise never reaches the machine —
-# the same failure as 12-ask on 2026-10-03. Per-user customisations belong in
-# ~/.claude/settings.local.json, NOT in a managed fragment (and NOT in
-# ~/.claude/settings.json: cast-merge-settings.sh regenerates it from the fragments on
-# every install, so only settings.local.json survives).
-# Remaining fragments (env, model overrides, etc.) skip-if-exists; a differing
-# copy is reported (report-only drift WARN after the loop), never overwritten.
-# Downstream-only fragments (filenames not in source) are preserved by virtue of never being
-# touched. Backup of the prior CAST-owned copy goes to backups/.
+# Policy: EVERY fragment shipped in the repo's managed-settings.d/ is CAST-owned: it is
+# overwritten on reinstall so repo changes reach the machine (a differing live copy is
+# backed up first). Earlier skip-if-exists handling let fixes silently miss installs
+# (61-sandbox 2026-07-02, 12-ask 2026-10-03, 00-env 2026-11). Personal overrides go in a
+# downstream-only fragment whose name is not in the repo and that sorts last, e.g.
+# 90-personal-defaults.json (see docs/agents/AGENT-ROSTER.md "Personal override"); this
+# loop only iterates repo files, so such fragments are never touched. Other per-user
+# customisations belong in ~/.claude/settings.local.json (NOT ~/.claude/settings.json:
+# cast-merge-settings.sh regenerates it from the fragments on every install).
 info "Installing settings fragments..."
 mkdir -p "$CLAUDE_DIR/managed-settings.d"
-FRAGMENTS_DRIFTED=""
-FRAGMENTS_DRIFT_COUNT=0
 for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
     [ -f "$fragment" ] || continue
     base="$(basename "$fragment")"
     dest="$CLAUDE_DIR/managed-settings.d/$base"
-    case "$base" in
-        *-hooks-*.json|50-mcp.json|05-behavior.json|10-permissions.json|11-deny.json|12-ask.json|61-sandbox.json)
-            # CAST-owned: overwrite to propagate source updates
-            if [ -f "$dest" ] && ! cmp -s "$fragment" "$dest"; then
-                mkdir -p "$BACKUP_DIR/managed-settings.d"
-                cp "$dest" "$BACKUP_DIR/managed-settings.d/$base"
-                # cp inherits the live file's mode (possibly 644); backups are 600 regardless.
-                chmod 600 "$BACKUP_DIR/managed-settings.d/$base"
-                warn "  Replaced (differed from repo): managed-settings.d/$base — prior copy backed up to $BACKUP_DIR/managed-settings.d/$base"
-            fi
-            cp "$fragment" "$dest"
-            success "  Synced: managed-settings.d/$base"
-            ;;
-        *)
-            # User-customizable: skip if present
-            if [ -f "$dest" ]; then
-                info "  Skipped (exists): managed-settings.d/$base"
-                if ! cmp -s "$fragment" "$dest"; then
-                    FRAGMENTS_DRIFTED="$FRAGMENTS_DRIFTED$base
-"
-                    FRAGMENTS_DRIFT_COUNT=$((FRAGMENTS_DRIFT_COUNT + 1))
-                fi
-            else
-                cp "$fragment" "$dest"
-                success "  Installed: managed-settings.d/$base"
-            fi
-            ;;
-    esac
+    if [ -f "$dest" ] && ! cmp -s "$fragment" "$dest"; then
+        mkdir -p "$BACKUP_DIR/managed-settings.d"
+        cp "$dest" "$BACKUP_DIR/managed-settings.d/$base"
+        # cp inherits the live file's mode (possibly 644); backups are 600 regardless.
+        chmod 600 "$BACKUP_DIR/managed-settings.d/$base"
+        warn "  Replaced (differed from repo): managed-settings.d/$base — prior copy backed up to $BACKUP_DIR/managed-settings.d/$base"
+    fi
+    cp "$fragment" "$dest"
+    success "  Synced: managed-settings.d/$base"
 done
-
-# Drift report (report-only — install.sh NEVER overwrites a user-customizable fragment).
-# Local customization is legitimate; this only surfaces that the copies differ.
-if [ "$FRAGMENTS_DRIFT_COUNT" -gt 0 ]; then
-    warn "  WARNING: $FRAGMENTS_DRIFT_COUNT user-customizable settings fragment(s) differ from the repo source (install.sh never overwrites these):"
-    while IFS= read -r drifted_name; do
-        [ -n "$drifted_name" ] || continue
-        warn "    - $drifted_name"
-    done <<EOF
-$FRAGMENTS_DRIFTED
-EOF
-    warn "  Review with: diff \"$SCRIPT_DIR/managed-settings.d/<name>\" \"$CLAUDE_DIR/managed-settings.d/<name>\""
-fi
 
 # Harden fragment permissions — fragments may contain tokens/paths; 644 is too open
 chmod 600 "$CLAUDE_DIR"/managed-settings.d/*.json 2>/dev/null || true

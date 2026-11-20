@@ -59,12 +59,33 @@ run_install_personal() {
   run_install
 
   [ -d "$HOME/.claude/skills/briefing-writer" ]
-  [ -d "$HOME/.claude/skills/careful-mode" ]
-  [ -d "$HOME/.claude/skills/freeze-mode" ]
   [ -d "$HOME/.claude/skills/git-activity" ]
   [ -d "$HOME/.claude/skills/merge" ]
   [ -d "$HOME/.claude/skills/plan" ]
-  [ -d "$HOME/.claude/skills/wizard" ]
+}
+
+@test "Install: retired commands/skills are absent and /cast-doctor replaces /doctor" {
+  local c s
+  mkdir -p "$HOME/.claude/commands"
+  for c in doctor feature secure test laconic merge orchestrate plan; do
+    echo stale > "$HOME/.claude/commands/$c.md"
+  done
+  for s in careful-mode freeze-mode wizard ship; do
+    mkdir -p "$HOME/.claude/skills/$s"
+    echo stale > "$HOME/.claude/skills/$s/SKILL.md"
+  done
+  run_install
+
+  for c in doctor feature secure test laconic merge orchestrate plan; do
+    [ ! -e "$HOME/.claude/commands/$c.md" ]
+  done
+  for s in careful-mode freeze-mode wizard ship; do
+    [ ! -e "$HOME/.claude/skills/$s" ]
+  done
+  [ -f "$HOME/.claude/commands/cast-doctor.md" ]
+  for s in laconic merge orchestrate plan; do
+    [ -f "$HOME/.claude/skills/$s/SKILL.md" ]
+  done
 }
 
 @test "Install: default install (no --personal) does NOT install project-catalog" {
@@ -1129,35 +1150,40 @@ assert_owned_fragment_replaced() {
   done
 }
 
-@test "Install: a customized user fragment is preserved and reported as drift" {
+@test "Install: a differing repo fragment (00-env.json) is synced with backup; downstream-only fragment untouched" {
   run_install
 
-  # 00-env.json remains a user-customizable (skip-if-exists) fragment
-  local env_dest="$HOME/.claude/managed-settings.d/00-env.json"
+  local fdir="$HOME/.claude/managed-settings.d"
+  local env_dest="$fdir/00-env.json"
   [ -f "$env_dest" ] || { echo "FAIL: 00-env.json not installed" >&2; return 1; }
 
-  # Local customization of a user-customizable fragment
+  # Diverged live copy of a formerly skip-if-exists fragment + downstream-only fragment
   printf '{"env":{"CUSTOM_MARKER":"custom-marker"}}\n' > "$env_dest"
+  printf '{"model":"personal-marker"}\n' > "$fdir/90-personal-defaults.json"
 
   run run_install
   assert_success
 
-  # Preserved — install.sh must never overwrite a skip-if-exists fragment
-  if ! grep -q "custom-marker" "$env_dest"; then
-    echo "FAIL: customized 00-env.json was overwritten on reinstall" >&2
-    cat "$env_dest" >&2
+  # Overwritten with the repo copy
+  cmp -s "$REPO_DIR/managed-settings.d/00-env.json" "$env_dest" || {
+    echo "FAIL: 00-env.json not synced to repo copy" >&2
     return 1
-  fi
+  }
+  assert_output --partial "Replaced (differed from repo): managed-settings.d/00-env.json"
+  assert_output --partial "Synced: managed-settings.d/00-env.json"
+  refute_output --partial "Skipped (exists): managed-settings.d/"
 
-  # Skipped, not synced
-  assert_output --partial "Skipped (exists): managed-settings.d/00-env.json"
-  refute_output --partial "Replaced (differed from repo): managed-settings.d/00-env.json"
+  # Prior copy backed up with its old content
+  local bak
+  bak="$(compgen -G "$HOME/.claude/backups/*/managed-settings.d/00-env.json" | head -1)"
+  [ -n "$bak" ] || { echo "FAIL: no backup of 00-env.json" >&2; return 1; }
+  grep -q "custom-marker" "$bak" || { echo "FAIL: backup lacks old content" >&2; return 1; }
 
-  # Reported — report-only drift WARN names the file (and only the drifted one)
-  assert_output --partial "differ from the repo source"
-  assert_output --partial "    - 00-env.json"
-  refute_output --partial "    - 10-permissions.json"
-  refute_output --partial "    - 05-behavior.json"
+  # Downstream-only fragment untouched
+  [ "$(cat "$fdir/90-personal-defaults.json")" = '{"model":"personal-marker"}' ] || {
+    echo "FAIL: 90-personal-defaults.json was modified" >&2
+    return 1
+  }
 }
 
 @test "Install: clean reinstall reports no fragment drift" {
@@ -1165,7 +1191,6 @@ assert_owned_fragment_replaced() {
 
   run run_install
   assert_success
-  refute_output --partial "differ from the repo source"
   refute_output --partial "Replaced (differed from repo)"
 }
 

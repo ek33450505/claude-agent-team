@@ -280,7 +280,7 @@ real security boundary.
 | Process mass-kill | `pkill`/`killall`/`kill -1`/`kill 0` | `cast-command-guard.py` (kill rule) | hard-block | `CAST_KILL_OK=1` | ✓ hook (unconditional) |
 | Destructive delete | `rm -rf`/rmtree of protected roots | `cast-command-guard.py` (rm rule) + `cast_guard.safe_rmtree` + `blast-radius-lint.sh` | hard-block + scoped lib + CI lint | `CAST_RM_OK=1` | ✓ hook (unconditional) + lib + lint |
 | Risky write | literal-`~` path, policy-protected file, badge mismatch | `write-guards.py` + `pre-tool-guard.sh` (policy rule) | hard-block | `CAST_POLICY_OVERRIDE=1` (audited) | ✗ hook-only |
-| Orchestration pause | batch interrupt window; freeze/careful mode | `skills/orchestrate`, `skills/freeze-mode` | confirm-pause | abort / deactivate | ✗ confirm-only |
+| Orchestration pause | batch interrupt window | `skills/orchestrate` | confirm-pause | abort / deactivate | ✗ confirm-only |
 
 Legend: **✓** survives an unattended auto-chain · **◑** survives only via its non-hook layer (agent refusal, guard-lib, or CI lint) · **✗** interactive-context only (bypassed headless, absent in cron).
 

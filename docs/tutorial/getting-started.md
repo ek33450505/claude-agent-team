@@ -31,11 +31,11 @@ bash "$(brew --prefix)/opt/cast/libexec/install.sh"   # sets up ~/.claude, cast.
 Expected output (abbreviated):
 
 ```
-CAST Installer (v10.7.0)
+CAST Installer (v10.8.0)
 ...
-Installation complete! (CAST v10.7.0)
+Installation complete! (CAST v10.8.0)
 
-  Installed: <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents, <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> commands, <!-- CAST_SKILL_COUNT -->19<!-- /CAST_SKILL_COUNT --> skills
+  Installed: <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents, <!-- CAST_COMMAND_COUNT -->14<!-- /CAST_COMMAND_COUNT --> commands, <!-- CAST_SKILL_COUNT -->15<!-- /CAST_SKILL_COUNT --> skills
 ```
 
 ### Alternative: clone + install
@@ -75,7 +75,7 @@ cast status
 Expected output (abbreviated):
 
 ```
-CAST v10.7.0
+CAST v10.8.0
 ======================================================================
 Agents      <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> in ~/.claude/agents/
 Hooks       NN active

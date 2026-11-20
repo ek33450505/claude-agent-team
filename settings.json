@@ -11,6 +11,7 @@
   },
   "feedbackSurveyRate": 0,
   "cleanupPeriodDays": 30,
+  "respondToBashCommands": false,
   "sandbox": {
     "failIfUnavailable": true,
     "enabled": true,
@@ -397,6 +398,19 @@
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-precompact-memory-save.sh",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "id": "cast-model-switch-recorder",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-model-switch-hook.sh",
+            "timeout": 3,
+            "async": true
           }
         ]
       }

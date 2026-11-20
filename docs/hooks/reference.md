@@ -56,6 +56,12 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 | `cast-precompact-guard.sh` | `*` | Blocks auto-compaction if any tracked repo is dirty; manual `/compact` always passes through. |
 | `cast-precompact-memory-save.sh` | `*` | Saves a snapshot of the conversation summary before compaction (owner-only permissions). |
 
+## PostModelSwitch hooks (1)
+
+| Script | Matcher | What it does |
+|---|---|---|
+| `cast-model-switch-hook.sh` | `*` | Records each session model switch (from/to model, source) as a `model_switch` row in `routing_events`; async, never blocks. |
+
 ## Stop hooks (2)
 
 | Script | Matcher | What it does |

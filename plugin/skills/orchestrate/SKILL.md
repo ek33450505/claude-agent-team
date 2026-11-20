@@ -52,16 +52,13 @@ Create one TaskCreate entry per batch (subject = "Batch N: [description]"). The 
 
 ## Step 2.5 — Branch Pre-Flight
 
-Read `target_branch` from the manifest JSON (parsed in Step 2), then:
+Read `target_branch` from the manifest JSON (parsed in Step 2). `target_branch` is required; if absent, BLOCK and stop. Then:
 ```bash
 CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-TODAY=$(date +%Y%m%d); CUTOVER=20260603
 ```
 
-**Case 1** — `target_branch` absent AND today < CUTOVER: warn `[CAST-ORCHESTRATE] DEPRECATION WARNING: omits target_branch. Plans without target_branch will fail from 2026-06-03.` Log and proceed.
-**Case 2** — `target_branch` absent AND today ≥ CUTOVER: BLOCK. `target_branch` is required in the manifest (enforced since 2026-06-03). Stop.
-**Case 3** — `target_branch` matches current branch: log `[CAST-ORCHESTRATE] Branch check passed: $CURRENT_BRANCH` and continue.
-**Case 4** — `target_branch` present but branch mismatch: print current vs target, stop and wait for explicit "y"/"yes" before proceeding to Step 3. Prevents C3-on-C2-branch errors.
+**Case 1** — `target_branch` matches current branch: log `[CAST-ORCHESTRATE] Branch check passed: $CURRENT_BRANCH` and continue.
+**Case 2** — `target_branch` present but branch mismatch: print current vs target, stop and wait for explicit "y"/"yes" before proceeding to Step 3. Prevents C3-on-C2-branch errors.
 
 ## Step 3 — Present the Queue
 
@@ -158,14 +155,16 @@ python3 ~/.claude/scripts/orchestrate-dispatch.py log-quality-gate \
 (`$CONTRACT_PASSED` = 1 if valid Status found first try, 0 otherwise; `$RETRY_COUNT` = 0 or 1; `$STATUS_LINE` = extracted Status line or "MISSING")
 
 4. Route based on Status:
-   - `Status: DONE` → mark task completed, write checkpoint, continue
-   - `Status: DONE_WITH_CONCERNS` → log concern text, mark completed, continue
+   - `Status: DONE` → run items 5 and 6, then mark task completed, write checkpoint, continue
+   - `Status: DONE_WITH_CONCERNS` → log concern text, run items 5 and 6, then mark completed and continue
    - `Status: BLOCKED` or no Status after retry → write checkpoint and stop: "Batch N blocked. Human intervention required. Blocker: [reason]"
    - `Status: NEEDS_CONTEXT` → stop and request clarification before continuing
 
 5. **File presence check** — after DONE/DONE_WITH_CONCERNS, run `git status --short` and `git diff --stat HEAD | tail -20`. Read 2-3 files the agent claimed to modify. If no changes but edits claimed, retry once or escalate — do NOT silently continue.
 
-After each batch: mark task `completed`, print `[BATCH N COMPLETE]`, then:
+6. **Review gate (this session runs it)** — when the batch's agent changed files (backend-writer, frontend-writer, bash-specialist, debugger, or any agent whose `git diff --stat` shows changes) and returned DONE/DONE_WITH_CONCERNS: `shasum -a 256` the unit's files, then dispatch `code-reviewer` (unnamed; READ-ONLY clause) scoped to those files — in a parallel batch, one code-reviewer per writer, scoped to that writer's `owns_files`. Do not proceed until it returns DONE or DONE_WITH_CONCERNS, then re-compare the shasums (a reviewer holds Bash and has reverted files before). On BLOCKED, send the findings back to the writer, then re-review only the fix's delta. After a `debugger` DONE the order is: code-reviewer, then `test-runner` in its own sequential batch (never alongside reviewers). Cap: one debugger round per failing batch; a test-runner BLOCKED after that round means stop and escalate to the user.
+
+After each batch has passed items 5 and 6: mark task `completed`, print `[BATCH N COMPLETE]`, then:
 ```bash
 mkdir -p ~/.claude/cast && echo "[BATCH $BATCH_ID COMPLETE] $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$CHECKPOINT_FILE"
 source ~/.claude/scripts/cast-events.sh && cast_emit_event 'task_completed' 'orchestrate-skill' "batch-$BATCH_ID" '' '<summary>' '<STATUS>'
@@ -185,15 +184,7 @@ cast_emit_event 'task_completed' 'orchestrate-skill' 'session' '' 'All batches c
 
 ## Mandatory Chain Entries
 
-The following agents automatically dispatch their successor agents when status = DONE:
-
-- **backend-writer** → code-reviewer
-- **frontend-writer** → code-reviewer
-- **bash-specialist** → code-reviewer
-- **debugger** → test-runner
-- **security** → code-reviewer
-
-These fire automatically after each upstream agent completes and should not be re-dispatched manually in the plan.
+Writer agents do not dispatch reviewers or commits; this session runs the review gate (Step 4, item 6), the test-runner batch after debugger, and every commit (Commit Pre-Stage Protocol).
 
 ## Output Compression Rules
 - Summarize each agent's response in **under 100 words**. Never reproduce content from the agent's spawn prompt.

@@ -11,11 +11,11 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `/agents` | List all installed CAST agents with model and description |
 | `/bash` | Dispatch bash-specialist agent for shell scripting and BATS work |
 | `/cast` | CAST diagnostic and manual dispatch command |
+| `/cast-doctor` | Run comprehensive CAST system health check (`/doctor` is Claude Code's own built-in) |
 | `/commit` | Dispatch commit agent to create a semantic git commit |
 | `/debug` | Dispatch debugger agent to investigate and fix an issue |
 | `/devops` | Dispatch devops agent for CI/CD, Docker, and infrastructure |
 | `/docs` | Dispatch docs agent to update documentation |
-| `/doctor` | Run comprehensive CAST system health check |
 | `/laconic` | Toggle laconic terse-output mode. Usage: /laconic [lite\|full\|ultra\|off] |
 | `/merge` | Dispatch merge agent for git merges, rebases, conflict resolution |
 | `/morning` | Dispatch morning-briefing agent to generate today's briefing |
@@ -25,9 +25,6 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `/research` | Dispatch researcher agent for technical research |
 | `/review` | Review code changes with size-appropriate strategy |
 | `/roadmap` | Resume the CAST backlog — see `~/.claude/research/2026-06-03-anthropic-devs-claude-code-convergence.md` for the current convergence roadmap (research/cast-future-roadmap.md no longer exists) |
-| `/secure` | Dispatch security agent for a security review |
-| `/ship` | Run ship workflow: tests → CI check → commit → push → journal _(skill-backed, not one of the 19 core commands)_ |
-| `/test` | Dispatch test-writer agent to write tests |
 
 ---
 
@@ -66,13 +63,10 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | Skill | Description | User-invocable |
 |---|---|---|
 | briefing-writer | Assemble morning briefing sections into structured markdown | No |
-| careful-mode | Require explicit confirmation before Write/Edit/Bash operations | Yes |
-| freeze-mode | Read-only session, no file modifications allowed | Yes |
 | git-activity | Scan project repos for yesterday's git activity | No |
 | merge | Git merge, rebase, conflict resolution, worktree cleanup | Yes |
 | orchestrate | Execute a CAST plan via the /orchestrate skill (main session dispatches sub-agents inline) | Yes |
 | plan | Write a structured plan with Agent Dispatch Manifest | Yes |
-| wizard | Multi-step workflow with human-approval gates | Yes |
 
 ---
 
@@ -81,7 +75,6 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | Subcommand | Description | Key Flags |
 |---|---|---|
 | `cast status` | Terminal health dashboard | `--json` |
-| `cast exec <plan>` | Execute a plan manifest | `--resume`, `--status` |
 | `cast memory search` | Search agent memories | `--agent`, `--project`, `--limit` |
 | `cast memory list` | List all agent memories | `--agent`, `--type` |
 | `cast memory forget <id>` | Delete a memory entry | |
@@ -190,7 +183,7 @@ These directives appear in hook-injected context and must be followed immediatel
 ### Debug a failure
 1. `/debug` -- describe the error or paste the stack trace
 2. Debugger investigates, proposes a fix, and self-dispatches code-reviewer
-3. `/test` -- verify the fix passes tests
+3. Dispatch test-runner (or test-writer for new coverage) -- verify the fix passes tests
 
 ### Morning briefing
 1. `/morning` -- generates today's briefing

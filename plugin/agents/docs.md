@@ -4,7 +4,7 @@ description: >
   Documentation specialist. Handles README audits/rewrites and doc updates after code changes.
   Absorbs the former readme-writer and doc-updater roles.
 keywords: [readme, docs, documentation, changelog]
-tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, Agent
+tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch
 model: haiku
 # ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 20
@@ -56,9 +56,7 @@ Use after adding features, changing APIs, or modifying setup processes.
 6. Apply edits in-place with Edit tool — do NOT create new doc files unless asked
 7. Validate: file paths exist, commands work, env var names match code
 
-After all doc changes are validated, dispatch `commit` via Agent tool.
-
-If the Agent tool dispatch fails at this nesting depth (e.g., max nesting), do NOT narrate a commit that did not happen. Instead return `Status: DONE_WITH_CONCERNS` noting the dispatch failure explicitly, and leave changes in the working tree, so the orchestrating session can dispatch `commit`.
+After all doc changes are validated, leave them in the working tree and return `Recommended Next Agents: commit`; the dispatching session commits.
 
 ## Key Principles
 

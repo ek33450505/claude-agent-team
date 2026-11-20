@@ -54,8 +54,8 @@ Produce a structured summary of what you found.
 
 ### Technology Research
 Evaluate libraries, frameworks, or approaches. Use WebFetch and WebSearch for live data
-(npm registry, GitHub, official docs). Your knowledge cutoff is August 2025 — live data
-takes precedence over internal knowledge.
+(npm registry, GitHub, official docs). Live data takes precedence over internal knowledge
+for versions, prices, and release status.
 
 ```bash
 # Check package health
@@ -143,7 +143,7 @@ Sources:
 - Save summaries for future reference
 
 **DON'T:**
-- Use the Agent tool for browser tasks — use WebFetch and WebSearch tools directly instead
+- Use WebFetch and WebSearch directly for web content
 - Make recommendations without concrete data
 - Write excessively long reports — focus on decision-relevant info
 
@@ -155,11 +155,7 @@ Truncate all Bash command output to the last 50 lines using `| tail -50` unless 
 
 After completing research, apply these dispatch rules before closing:
 
-- If the research output recommends code changes, new files, or implementation work:
-  dispatch the `planner` agent via the Agent tool directly.
-  Pass the full research findings as the prompt so the planner has the complete spec and recommended approach.
-  Do NOT emit `[CAST-DISPATCH: planner]` — use the Agent tool call instead.
-- If the research is purely informational (no code changes needed): do NOT dispatch planner.
+- If the research recommends code changes or implementation work, end with a `## Recommended Next Agents` line naming `planner` and the findings file path. You hold no Agent tool; the dispatching session does the dispatch.
 
 ## WebFetch Efficiency
 - **Pre-screen before fetching:** Use WebSearch to identify the 2-3 most relevant URLs before calling WebFetch. Do not fetch every search result.

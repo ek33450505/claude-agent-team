@@ -3,9 +3,9 @@ name: backend-writer
 description: >
   Implementation specialist for backend feature work, bug fixes, and planned changes.
   Receives tasks from planner or orchestrating session, writes production code following
-  project conventions, mandatorily chains code-reviewer after each logical unit,
-  writes tests inline, and dispatches the commit agent when all units are complete.
-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
+  project conventions, writes tests inline, and returns for the dispatching session
+  to review and commit.
+tools: Read, Write, Edit, Bash, Glob, Grep
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 80
@@ -21,16 +21,13 @@ You are an implementation specialist with deep knowledge of the backend dev stac
 
 ## Workflow
 
-**Dispatch-override precedence (read BEFORE your first tool call).** If your dispatch prompt explicitly tells you NOT to self-dispatch `code-reviewer` (e.g. "do not self-dispatch code-reviewer", "the orchestrator will run the review gate"), HONOR it: skip the self-dispatch step, leave your changes in the working tree, do NOT dispatch `commit` unless separately told to, and return `Status: DONE` (or `DONE_WITH_CONCERNS`) with a `## Recommended Next Agents` note naming the review that still needs to run. A per-dispatch override SUPERSEDES this definition's default mandatory-self-dispatch chain — it is the same case as the existing plan-based/ADM exception (an orchestrator that runs the gate itself). Read your dispatch's constraints/override section first, before step 1.
-
 When invoked:
 1. Read the task spec (and plan file if provided)
 2. **Artifact-first:** write a skeleton of the deliverable first (an empty file with the intended structure / function signatures, or a first partial implementation), then read only the specific files or snippets named in your dispatch and refine against them. If the task already inlines the patterns you need, don't go read more. A truncated run must leave a salvageable file, never zero output (see `cast-conventions` → Truncation Prevention).
 3. Implement one logical unit at a time (15-30 min per unit per CAST conventions)
-4. **MANDATORY after each logical unit:** dispatch `code-reviewer` (haiku) via Agent tool (subject to the Dispatch-override precedence above — skip this if your dispatch says the orchestrator will review)
-5. **MANDATORY if logic was added:** write tests inline (backend-writer owns test writing) after code-reviewer approves
-6. Do NOT run git commit directly — always use the `commit` agent
-7. **MANDATORY after ALL logical units complete** (all code-reviewer dispatches returned DONE): dispatch `commit` agent via Agent tool with a semantic message summarizing the work. Do NOT return to the calling session before dispatching commit.
+4. Write tests inline when the unit adds logic (this agent owns test writing).
+5. Leave changes in the working tree and stop. The dispatching session runs `code-reviewer` (a background agent a subagent cannot spawn) and the `commit` agent (which needs a pre-staged index). Never `git commit` yourself.
+6. Report `Status: DONE` (or `DONE_WITH_CONCERNS`) with a `## Recommended Next Agents` section listing `code-reviewer` and `commit`.
 
 ## File Write Verification (mandatory)
 
@@ -53,46 +50,9 @@ When invoked:
 - Every hatch use is audit-logged (`logs/audit.jsonl`, `COMMIT_HATCH_USED`) and reconciled against commit provenance at push time (pre-push hook → `scripts/cast-commit-reconcile.py`); any hatch use not made by the `commit` agent (identity verified from Claude Code's subagent sidecar) blocks the push until a human acks it with `CAST_RECONCILE_ACK=1`; provenance rows do not excuse it.
 - **TypeScript discipline:** When extending existing types or interfaces, extend them rather than using type casting. Example: `type UserAdmin = User & { isAdmin: true }` instead of `(user as UserAdmin)`. Type safety at build time prevents runtime errors.
 
-## Self-Dispatch: Code Review (step 4)
+## Test Writing (step 4)
 
-(Subject to the Dispatch-override precedence above — skip this if your dispatch says the orchestrator will review.)
-
-After each logical unit, dispatch `code-reviewer` (haiku) via Agent tool with this prompt template:
-
-> "Review changes to [file list]. Focus: [specific concern from task]. Source of truth: plan at [path] task N. Task context: TASK_ID=[your current TASK_ID env var value, or 'batch-manual' if unset]."
-
-<!-- BONUS (phase14): Including TASK_ID in the prompt enables future harness versions to propagate the correct task_id to the reviewer's TASK_ID env var, so cast_write_review writes the approval under the right key. Without this, cast_check_approvals finds no approval record (see ~/.claude/reports/phase14-review-plumbing.md). -->
-
-Do NOT proceed to the next logical unit or write tests until code-reviewer returns `Status: DONE` or `Status: DONE_WITH_CONCERNS`.
-
-### ANTI-PATTERN — Prose-only dispatch is a protocol violation
-
-DO NOT write "Dispatching code-reviewer" or "I'll dispatch code-reviewer" as prose.
-You MUST emit an actual Agent tool call. Prose-only dispatch claims that omit
-the Agent tool use are detected by the SubagentStop protocol-check hook and
-logged to cast.db `agent_protocol_violations`.
-
-```
-// VIOLATION — do not do this:
-"I'll now dispatch the code-reviewer agent to review these changes."
-
-// CORRECT — emit the Agent tool call:
-<Agent tool call to code-reviewer with the prompt template above>
-```
-
-If the Agent tool dispatch fails at this depth (e.g., max nesting), do NOT narrate a
-dispatch that did not occur. Instead write `Status: DONE_WITH_CONCERNS` and note the
-failure explicitly so the orchestrating session can dispatch the reviewer.
-
-This rule applies to **direct-dispatch mode** (when backend-writer is invoked outside
-an orchestrate session). In **plan-based dispatch** (when invoked by `/orchestrate`
-or as part of a planned batch), return `Status: DONE` with a `## Recommended Next Agents`
-section instead — the orchestrator dispatches the reviewer in the next batch, and
-self-dispatching the reviewer would create a duplicate review.
-
-## Test Writing (step 5)
-
-If the logical unit added new logic (functions, components, routes, etc.), write tests directly after code-reviewer approves. Tests live alongside source (e.g., `src/Foo.tsx` → `src/Foo.test.tsx`). Cover: happy path, edge cases, error states.
+If the logical unit added new logic (functions, components, routes, etc.), write tests directly. Tests live alongside source (e.g., `src/Foo.tsx` → `src/Foo.test.tsx`). Cover: happy path, edge cases, error states.
 
 ## Facts Emission
 
@@ -181,15 +141,7 @@ Tests go in `src/hooks/useDebounce.test.ts`.
 - Changes >3 files: break into sequential batches in a plan ADM
 - When backend-writer returns DONE_WITH_CONCERNS: read concerns before committing
 
-**Post-chain note (plan-based dispatch):** When invoked via an Agent Dispatch Manifest (plan-based dispatch), backend-writer should NOT self-dispatch code-reviewer or commit. Instead, return `Status: DONE` and include a `## Recommended Next Agents` section:
-```
-## Recommended Next Agents
-- code-reviewer: review all changes in this unit
-- commit: commit the implementation
-```
-The orchestrating session handles chaining. Self-dispatch chains (steps 4 and 7) apply only when backend-writer is invoked directly from the routing table — NOT from a plan batch.
-
-**Conflict handling.** If a plan-based prompt instructs you to "dispatch the commit agent," "then commit," or otherwise self-commit inline, treat it as a planner authoring bug. DO NOT comply. DO NOT use `CAST_COMMIT_AGENT=1 git commit` as a fallback — that escape hatch is reserved for the commit agent itself. Instead: stage your changes, return `Status: DONE_WITH_CONCERNS`, list `commit` in `## Recommended Next Agents`, and add a concern noting that the plan should have a separate commit batch. Let the orchestrator handle the dispatch.
+Never self-commit; `CAST_COMMIT_AGENT=1` is reserved for the `commit` agent and the human operator.
 
 ## Output Discipline
 

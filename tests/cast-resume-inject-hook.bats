@@ -705,3 +705,124 @@ _seed_auto_file() {
   run grep -c 'rev-parse' "$SHIM_LOG"
   assert_output "0"
 }
+
+# ---------------------------------------------------------------------------
+# B-6. sessionTitle (CC >= 2.1.152): manual handoff + source=startup only
+# ---------------------------------------------------------------------------
+
+# Print hookSpecificOutput.sessionTitle ("<absent>" when the key is missing).
+_title_of() {
+  printf '%s' "$1" | python3 -I -c '
+import json, sys
+h = json.load(sys.stdin)["hookSpecificOutput"]
+print(h.get("sessionTitle", "<absent>"))'
+}
+
+_mk_manual() {
+  mkdir -p "$RESUME_DIR"
+  printf '# Manual content\n' > "$RESUME_DIR/$1"
+}
+
+@test "sessionTitle: manual + startup sets '<slug>: <rest>'" {
+  _mk_manual "2026-11-20-fixture-repo-cc-adoption-adopt-phase.md"
+  cd "$FIXTURE_REPO"
+  run bash "$SCRIPT" <<< '{"source":"startup"}'
+  assert_success
+  [ "$(_title_of "$output")" = "fixture-repo: cc-adoption-adopt-phase" ]
+}
+
+@test "sessionTitle: manual + resume omits the key, keeps additionalContext" {
+  _mk_manual "2026-11-20-fixture-repo-cc-adoption-adopt-phase.md"
+  cd "$FIXTURE_REPO"
+  run bash "$SCRIPT" <<< '{"source":"resume"}'
+  assert_success
+  [ "$(_title_of "$output")" = "<absent>" ]
+  assert_output --partial 'additionalContext'
+}
+
+@test "sessionTitle: clear and compact omit the key" {
+  _mk_manual "2026-11-20-fixture-repo-x.md"
+  cd "$FIXTURE_REPO"
+  run bash "$SCRIPT" <<< '{"source":"clear"}'
+  [ "$(_title_of "$output")" = "<absent>" ]
+  run bash "$SCRIPT" <<< '{"source":"compact"}'
+  [ "$(_title_of "$output")" = "<absent>" ]
+}
+
+@test "sessionTitle: auto-only distillate + startup omits the key" {
+  mkdir -p "$RESUME_DIR"
+  printf '# Auto content\n' > "$RESUME_DIR/2026-11-20-fixture-repo-auto.md"
+  cd "$FIXTURE_REPO"
+  run bash "$SCRIPT" <<< '{"source":"startup"}'
+  assert_success
+  [ "$(_title_of "$output")" = "<absent>" ]
+}
+
+@test "sessionTitle: empty, garbage, {} and null source fail closed (no title)" {
+  _mk_manual "2026-11-20-fixture-repo-kickoff.md"
+  cd "$FIXTURE_REPO"
+  run bash "$SCRIPT" </dev/null
+  [ "$(_title_of "$output")" = "<absent>" ]
+  run bash "$SCRIPT" <<< 'not json {{'
+  [ "$(_title_of "$output")" = "<absent>" ]
+  run bash "$SCRIPT" <<< '{}'
+  [ "$(_title_of "$output")" = "<absent>" ]
+  run bash "$SCRIPT" <<< '{"source":null}'
+  [ "$(_title_of "$output")" = "<absent>" ]
+  run bash "$SCRIPT" <<< '["startup"]'
+  [ "$(_title_of "$output")" = "<absent>" ]
+}
+
+@test "sessionTitle: control chars stripped from filename" {
+  _mk_manual "$(printf '2026-11-20-fixture-repo-ab\001c\033d.md')"
+  cd "$FIXTURE_REPO"
+  run bash "$SCRIPT" <<< '{"source":"startup"}'
+  assert_success
+  [ "$(_title_of "$output")" = "fixture-repo: abcd" ]
+}
+
+@test "sessionTitle: capped at 80 chars" {
+  _mk_manual "2026-11-20-fixture-repo-$(printf 'a%.0s' $(seq 1 120)).md"
+  cd "$FIXTURE_REPO"
+  run bash "$SCRIPT" <<< '{"source":"startup"}'
+  assert_success
+  [ "$(_title_of "$output" | tr -d '\n' | wc -c | tr -d ' ')" = "80" ]
+}
+
+@test "sessionTitle: bidi override and zero-width chars stripped" {
+  _mk_manual "$(printf '2026-11-20-fixture-repo-a\xe2\x80\xaeb\xe2\x80\x8bc.md')"
+  cd "$FIXTURE_REPO"
+  run bash "$SCRIPT" <<< '{"source":"startup"}'
+  assert_success
+  [ "$(_title_of "$output")" = "fixture-repo: abc" ]
+}
+
+@test "sessionTitle: no-title shape is exactly hookEventName, additionalContext + systemMessage" {
+  _mk_manual "2026-11-20-fixture-repo-kickoff.md"
+  cd "$FIXTURE_REPO"
+  run bash "$SCRIPT" <<< '{"source":"resume"}'
+  assert_success
+  result="$(printf '%s' "$output" | python3 -I -c '
+import json, sys
+d = json.load(sys.stdin)
+print(list(d["hookSpecificOutput"].keys()), "systemMessage" in d)')"
+  [ "$result" = "['hookEventName', 'additionalContext'] True" ]
+}
+
+@test "sessionTitle: stdin padded past 4096 bytes is truncated, fails closed" {
+  _mk_manual "2026-11-20-fixture-repo-kickoff.md"
+  cd "$FIXTURE_REPO"
+  pad="$(printf 'x%.0s' $(seq 1 5000))"
+  run bash "$SCRIPT" <<< "{\"source\":\"startup\",\"pad\":\"$pad\"}"
+  assert_success
+  [ "$(_title_of "$output")" = "<absent>" ]
+  assert_output --partial 'additionalContext'
+}
+
+@test "sessionTitle: private-use char (U+E000) stripped" {
+  _mk_manual "$(printf '2026-11-20-fixture-repo-a\xee\x80\x80b.md')"
+  cd "$FIXTURE_REPO"
+  run bash "$SCRIPT" <<< '{"source":"startup"}'
+  assert_success
+  [ "$(_title_of "$output")" = "fixture-repo: ab" ]
+}
