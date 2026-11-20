@@ -4330,3 +4330,147 @@ class TestUnreadableTranscriptFailsClosed(_HandbackTranscriptMixin, _IsolatedDbP
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestResumedAgentPerLegDeltas(_IsolatedDbPathTestCase):
+    """A SendMessage-resumed subagent keeps agent_id + transcript and gets one
+    agent_runs row per leg; the transcript totals are cumulative, so each row
+    must store only its own leg (SUM over rows == transcript total)."""
+
+    _AGENT_RUNS_SCHEMA = TestSessionIdNullSafeMatch._AGENT_RUNS_SCHEMA
+    _ROUTING_EVENTS_SCHEMA = TestSessionIdNullSafeMatch._ROUTING_EVENTS_SCHEMA
+    _seed_row = TestSessionIdNullSafeMatch._seed_row
+    _make_ctx = TestSessionIdNullSafeMatch._make_ctx
+    _COLS = ("input_tokens", "output_tokens", "cache_read_input_tokens",
+             "cache_creation_input_tokens", "tool_uses", "cost_usd")
+
+    def _transcript(self, sid, aid):
+        d = os.path.join(self._tmpdir, '.claude', 'projects', 'proj', sid, 'subagents')
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, f'agent-{aid}.jsonl')
+
+    def _append_turn(self, path, i, o, cr, cc):
+        line = {"message": {"role": "assistant", "model": "claude-sonnet-5-5",
+                            "content": [{"type": "tool_use", "name": "Read", "input": {}}],
+                            "usage": {"input_tokens": i, "output_tokens": o,
+                                      "cache_read_input_tokens": cr,
+                                      "cache_creation_input_tokens": cc}}}
+        with open(path, 'a') as f:
+            f.write(json.dumps(line) + "\n")
+
+    def _stop(self, sid, aid):
+        ctx = self._make_ctx('security', sid, agent_id=aid)
+        css.stage0_fast_write(ctx)
+        ctx.response_text = 'Status: DONE'
+        css.stage2_transcript_cost(ctx)
+
+    def _row(self, rid):
+        conn = sqlite3.connect(os.environ['CAST_DB_PATH'])
+        try:
+            return conn.execute(
+                "SELECT " + ", ".join(self._COLS) + " FROM agent_runs WHERE id=?", (rid,)).fetchone()
+        finally:
+            conn.close()
+
+    def test_two_legs_store_per_leg_values_and_sum_to_transcript_total(self):
+        sid, aid = 'sess-leg', 'aid-leg'
+        tp = self._transcript(sid, aid)
+        r1 = self._seed_row('security', sid, agent_id=aid)
+        self._append_turn(tp, 1000, 200, 5000, 300)
+        self._stop(sid, aid)
+        leg1 = self._row(r1)
+        r2 = self._seed_row('security', sid, agent_id=aid)  # resume: new running row
+        self._append_turn(tp, 400, 100, 2000, 50)
+        self._stop(sid, aid)
+        leg2 = self._row(r2)
+        self.assertEqual(self._row(r1), leg1, 'leg 1 row was rewritten by leg 2')
+        self.assertEqual(leg1[:5], (1000, 200, 5000, 300, 1))
+        self.assertEqual(leg2[:5], (400, 100, 2000, 50, 1))
+        self.assertAlmostEqual(leg2[5], round(400 * 3 / 1e6 + 100 * 15 / 1e6 + 50 * 3 * 1.25 / 1e6
+                                              + 2000 * 3 * 0.1 / 1e6, 6), places=6)
+        for k in range(6):
+            self.assertAlmostEqual(leg1[k] + leg2[k], (1400, 300, 7000, 350, 2, leg1[5] + leg2[5])[k], places=6)
+        total_cost = css._compute_cost_usd({}, 1400, 300, 350, 7000)
+        self.assertAlmostEqual(leg1[5] + leg2[5], total_cost, places=5)
+
+    def test_single_leg_unchanged(self):
+        sid, aid = 'sess-one', 'aid-one'
+        tp = self._transcript(sid, aid)
+        r1 = self._seed_row('security', sid, agent_id=aid)
+        self._append_turn(tp, 1000, 200, 5000, 300)
+        self._stop(sid, aid)
+        row = self._row(r1)
+        self.assertEqual(row[:5], (1000, 200, 5000, 300, 1))
+        self.assertAlmostEqual(row[5], css._compute_cost_usd({}, 1000, 200, 300, 5000), places=5)
+
+    def test_larger_prior_cumulative_value_clamps_to_zero(self):
+        sid, aid = 'sess-clamp', 'aid-clamp'
+        tp = self._transcript(sid, aid)
+        old = self._seed_row('security', sid, agent_id=aid, status='DONE')
+        conn = sqlite3.connect(os.environ['CAST_DB_PATH'])
+        conn.execute("UPDATE agent_runs SET input_tokens=99999, output_tokens=99999, "
+                     "cache_read_input_tokens=99999, cache_creation_input_tokens=99999, "
+                     "tool_uses=99, cost_usd=99.0 WHERE id=?", (old,))
+        conn.commit()
+        conn.close()
+        r2 = self._seed_row('security', sid, agent_id=aid)
+        self._append_turn(tp, 10, 5, 20, 3)
+        self._stop(sid, aid)
+        self.assertEqual(self._row(r2), (0, 0, 0, 0, 0, 0.0))
+
+    def test_prior_leg_failure_falls_back_to_cumulative(self):
+        sid, aid = 'sess-fail', 'aid-fail'
+        tp = self._transcript(sid, aid)
+        r1 = self._seed_row('security', sid, agent_id=aid)
+        self._append_turn(tp, 10, 5, 20, 3)
+        with mock.patch.object(css, '_prior_leg_totals', side_effect=sqlite3.OperationalError('boom')):
+            self._stop(sid, aid)
+        self.assertEqual(self._row(r1)[:5], (10, 5, 20, 3, 1))
+
+    def test_payload_tool_uses_not_delta_when_transcript_has_none(self):
+        sid, aid = 'sess-tu', 'aid-tu'
+        tp = self._transcript(sid, aid)
+        old = self._seed_row('security', sid, agent_id=aid, status='DONE')
+        conn = sqlite3.connect(os.environ['CAST_DB_PATH'])
+        conn.execute("UPDATE agent_runs SET tool_uses=7 WHERE id=?", (old,))
+        conn.commit()
+        conn.close()
+        r2 = self._seed_row('security', sid, agent_id=aid)
+        with open(tp, 'a') as f:  # usage but zero tool_use blocks
+            f.write(json.dumps({"message": {"role": "assistant", "content": [{"type": "text", "text": "x"}],
+                                            "usage": {"input_tokens": 10, "output_tokens": 5}}}) + "\n")
+        ctx = self._make_ctx('security', sid, agent_id=aid)
+        css.stage0_fast_write(ctx)
+        ctx.response_text = 'Status: DONE'
+        ctx.tool_uses = 4
+        css.stage2_transcript_cost(ctx)
+        self.assertEqual(self._row(r2)[4], 4)
+
+    def test_replayed_stop_changes_no_row_values(self):
+        sid, aid = 'sess-rp', 'aid-rp'
+        tp = self._transcript(sid, aid)
+        r1 = self._seed_row('security', sid, agent_id=aid)
+        self._append_turn(tp, 1000, 200, 5000, 300)
+        self._stop(sid, aid)
+        r2 = self._seed_row('security', sid, agent_id=aid)
+        self._append_turn(tp, 400, 100, 2000, 50)
+        self._stop(sid, aid)
+        before = (self._row(r1), self._row(r2))
+        self._stop(sid, aid)  # replay: no running row, latest row DONE
+        self.assertEqual((self._row(r1), self._row(r2)), before)
+
+    def test_reopened_abandoned_row_gets_total_minus_earlier_leg(self):
+        sid, aid = 'sess-ab', 'aid-ab'
+        tp = self._transcript(sid, aid)
+        r1 = self._seed_row('security', sid, agent_id=aid)
+        self._append_turn(tp, 1000, 200, 5000, 300)
+        self._stop(sid, aid)
+        r2 = self._seed_row('security', sid, agent_id=aid)
+        conn = sqlite3.connect(os.environ['CAST_DB_PATH'])
+        conn.execute("UPDATE agent_runs SET status='abandoned', abandoned_at='2026-01-01T00:00:00Z' "
+                     "WHERE id=?", (r2,))
+        conn.commit()
+        conn.close()
+        self._append_turn(tp, 400, 100, 2000, 50)
+        self._stop(sid, aid)
+        self.assertEqual(self._row(r2)[:5], (400, 100, 2000, 50, 1))
