@@ -28,4 +28,6 @@ Output rules — intensity: **{LEVEL}**
 - Code: unchanged. Numbers: unchanged. File paths: unchanged.
 
 Active level: **full**. To change: "laconic lite" / "laconic ultra" / "laconic off".
+
+When invoked as `/laconic <level>` (lite, full, ultra or off), switch to that level and confirm in one sentence.
 To deactivate: "laconic off" or start new session.

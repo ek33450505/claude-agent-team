@@ -1,5 +1,5 @@
 ---
-description: CAST doctor command
+description: CAST cast-doctor command
 ---
 
 Run a comprehensive CAST system health check.

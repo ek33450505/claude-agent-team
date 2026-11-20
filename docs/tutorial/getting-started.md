@@ -35,7 +35,7 @@ CAST Installer (v10.7.0)
 ...
 Installation complete! (CAST v10.7.0)
 
-  Installed: <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents, <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> commands, <!-- CAST_SKILL_COUNT -->19<!-- /CAST_SKILL_COUNT --> skills
+  Installed: <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents, <!-- CAST_COMMAND_COUNT -->14<!-- /CAST_COMMAND_COUNT --> commands, <!-- CAST_SKILL_COUNT -->15<!-- /CAST_SKILL_COUNT --> skills
 ```
 
 ### Alternative: clone + install

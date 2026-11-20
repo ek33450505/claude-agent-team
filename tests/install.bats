@@ -59,12 +59,33 @@ run_install_personal() {
   run_install
 
   [ -d "$HOME/.claude/skills/briefing-writer" ]
-  [ -d "$HOME/.claude/skills/careful-mode" ]
-  [ -d "$HOME/.claude/skills/freeze-mode" ]
   [ -d "$HOME/.claude/skills/git-activity" ]
   [ -d "$HOME/.claude/skills/merge" ]
   [ -d "$HOME/.claude/skills/plan" ]
-  [ -d "$HOME/.claude/skills/wizard" ]
+}
+
+@test "Install: retired commands/skills are absent and /cast-doctor replaces /doctor" {
+  local c s
+  mkdir -p "$HOME/.claude/commands"
+  for c in doctor feature secure test laconic merge orchestrate plan; do
+    echo stale > "$HOME/.claude/commands/$c.md"
+  done
+  for s in careful-mode freeze-mode wizard ship; do
+    mkdir -p "$HOME/.claude/skills/$s"
+    echo stale > "$HOME/.claude/skills/$s/SKILL.md"
+  done
+  run_install
+
+  for c in doctor feature secure test laconic merge orchestrate plan; do
+    [ ! -e "$HOME/.claude/commands/$c.md" ]
+  done
+  for s in careful-mode freeze-mode wizard ship; do
+    [ ! -e "$HOME/.claude/skills/$s" ]
+  done
+  [ -f "$HOME/.claude/commands/cast-doctor.md" ]
+  for s in laconic merge orchestrate plan; do
+    [ -f "$HOME/.claude/skills/$s/SKILL.md" ]
+  done
 }
 
 @test "Install: default install (no --personal) does NOT install project-catalog" {

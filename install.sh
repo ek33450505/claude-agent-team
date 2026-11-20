@@ -632,6 +632,10 @@ rm -f "$CLAUDE_DIR/scripts/cast-cwdchanged-hook.sh" "$CLAUDE_DIR/scripts/cast-fi
 rm -f "$CLAUDE_DIR/scripts/cast-instructions-loaded-hook.sh" "$CLAUDE_DIR/scripts/cast-post-compact-hook.sh" "$CLAUDE_DIR/scripts/cast-stats.sh"
 # Remove the cast exec plan executor retired in v10.8.0 (never used; /orchestrate replaces it)
 rm -f "$CLAUDE_DIR/scripts/cast-exec.sh"
+# Remove commands/skills retired or renamed in v10.8.0 (/doctor -> /cast-doctor; zero-use and duplicate wrappers)
+rm -f "$CLAUDE_DIR/commands/doctor.md" "$CLAUDE_DIR/commands/feature.md" "$CLAUDE_DIR/commands/secure.md" "$CLAUDE_DIR/commands/test.md"
+rm -f "$CLAUDE_DIR/commands/laconic.md" "$CLAUDE_DIR/commands/merge.md" "$CLAUDE_DIR/commands/orchestrate.md" "$CLAUDE_DIR/commands/plan.md"
+rm -rf "$CLAUDE_DIR/skills/careful-mode" "$CLAUDE_DIR/skills/freeze-mode" "$CLAUDE_DIR/skills/wizard" "$CLAUDE_DIR/skills/ship"
 # v7.5 Phase 7: removed dead reference skills
 rm -rf "$CLAUDE_DIR/skills/compact-discipline" "$CLAUDE_DIR/skills/thinking-budget"
 # Remove config retired in v7.5 Phase 6b (config-rot sweep, #152)

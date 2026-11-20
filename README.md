@@ -13,7 +13,7 @@
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
   <img src="https://img.shields.io/badge/version-10.7.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
-  <img src="https://img.shields.io/badge/tests-4880-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-4881-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-plugin-blueviolet" alt="Claude Code plugin">
 </p>
@@ -296,7 +296,7 @@ archives and promotes memories, and a memory recalled often decays more slowly t
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->265<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4880<!-- /CAST_TEST_COUNT --> test cases) cover hooks, migrations,
+<!-- CAST_TEST_FILE_COUNT -->265<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4881<!-- /CAST_TEST_COUNT --> test cases) cover hooks, migrations,
 guard logic, event emission and memory persistence, including tests that prove destructive operations
 **refuse**.
 
@@ -371,7 +371,7 @@ Full list, with what still holds in each case: [docs/known-limitations.md](docs/
 | [Known Limitations](docs/known-limitations.md) | What CAST cannot do, and why |
 | [Full Docs Index](docs/README.md) | Everything, with one-line descriptions |
 
-CAST ships <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> slash commands and <!-- CAST_SKILL_COUNT -->19<!-- /CAST_SKILL_COUNT --> on-demand skills.
+CAST ships <!-- CAST_COMMAND_COUNT -->14<!-- /CAST_COMMAND_COUNT --> slash commands and <!-- CAST_SKILL_COUNT -->15<!-- /CAST_SKILL_COUNT --> on-demand skills.
 
 ## Ecosystem
 
