@@ -10,6 +10,7 @@ model: haiku
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
+omitClaudeMd: true
 ---
 
 You are a test execution gate. Your only job: run existing tests, report real pass/fail, dispatch debugger once if tests fail.

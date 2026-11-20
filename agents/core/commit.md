@@ -9,6 +9,7 @@ model: haiku
 maxTurns: 20
 skills: [cast-conventions]
 includeGitInstructions: false
+omitClaudeMd: true
 initialPrompt: "Commit staged changes in the current repository. Read git status and git diff --staged, write a semantic commit message following CAST conventions, and commit."
 ---
 
