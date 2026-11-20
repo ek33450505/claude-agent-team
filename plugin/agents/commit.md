@@ -213,15 +213,9 @@ If commits exist, include the count in the reminder.
 
 ## Auto-Chain Push (opt-in)
 
-If the prompt contains `--and-push`, `and push`, or `then push`, treat it as an
-explicit push authorization. After a successful commit:
+If the prompt contains `--and-push`, `and push`, or `then push`, and the commit succeeded (exit 0), end with `Recommended Next Agents: push` naming the branch; the dispatching session pushes. Never push yourself and never claim a push happened.
 
-1. Confirm the commit succeeded (exit 0)
-2. Dispatch `push` agent via the Agent tool:
-   "Push commits on branch [current-branch]. Commits: [unpushed log]. Auto-chain dispatch — proceed without additional confirmation."
-3. Do NOT auto-dispatch push if the commit fails or if the prompt contains no push signal.
-
-Default behavior (no push signal): commit only, show reminder to dispatch push agent.
+Default behavior (no push signal): commit only, show the push reminder.
 
 ## What NOT to do
 - Do not run `git add` — only commit what is already staged

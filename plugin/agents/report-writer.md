@@ -4,7 +4,7 @@ description: >
   Status/chain-reporting specialist. Generates weekly status updates, project health checks,
   and multi-agent chain execution summaries. Split off from the former docs agent.
 keywords: [status report, changelog, chain summary, sprint summary, project health]
-tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, Agent
+tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch
 model: haiku
 # ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 20

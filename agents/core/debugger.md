@@ -1,8 +1,8 @@
 ---
 name: debugger
 description: >
-  Root-cause debugging of concrete failures — a reproduced error, a stack trace, a failing test, or observably wrong runtime behavior. Use when investigation needs more than one inline tool call. NOT for code-quality concerns (use code-reviewer), writing tests for passing code (use test-writer), or review-only findings; debugger edits code and self-chains commit, so route only confirmed defects.
-tools: Read, Edit, Bash, Grep, Glob, Agent
+  Root-cause debugging of concrete failures — a reproduced error, a stack trace, a failing test, or observably wrong runtime behavior. Use when investigation needs more than one inline tool call. NOT for code-quality concerns (use code-reviewer), writing tests for passing code (use test-writer), or review-only findings; debugger edits code and returns for the dispatching session to review and commit, so route only confirmed defects.
+tools: Read, Edit, Bash, Grep, Glob
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────
 # effort field is N/A on sonnet — only Opus reads it
@@ -39,19 +39,11 @@ Focus on fixing the underlying issue, not the symptoms.
 
 ## After Fix Is Verified
 
-**MANDATORY — do not skip any step:**
-
-**Dispatch-override precedence (read before proceeding with the mandatory steps below).** If your dispatch prompt explicitly tells you NOT to self-dispatch `code-reviewer` (e.g. "do not self-dispatch code-reviewer", "the orchestrator will run the review gate"), HONOR it: skip step 7's self-dispatch, leave your changes in the working tree, do NOT dispatch `commit` (step 8) unless separately told to, and return `Status: DONE` (or `DONE_WITH_CONCERNS`) with a `## Recommended Next Agents` note naming the review that still needs to run. A per-dispatch override SUPERSEDES this definition's default mandatory-self-dispatch chain — it is the same case as the existing plan-based/ADM exception (an orchestrator that runs the gate itself). This is distinct from the nesting-failure fallback in step 7 below (that fallback covers a dispatch that FAILS; this covers a dispatch you were explicitly told to SKIP).
+**Then:**
 
 6. Write a regression test directly (debugger owns test writing for bug fixes). Place it alongside the fixed file. The test must: (a) fail on the unfixed code, (b) pass after the fix.
-7. Dispatch `code-reviewer` via the Agent tool with this prompt (subject to the Dispatch-override precedence above — skip this if your dispatch says the orchestrator will review):
-   "Review the bug fix at [file:line] and the new regression test at [test file]. Confirm: (1) the fix is minimal — no unrelated changes, (2) the fix addresses root cause not symptoms, (3) the regression test would have caught this bug before the fix was applied."
-   If the Agent tool dispatch fails at this nesting depth (e.g., max nesting), do NOT narrate a review that did not happen. Instead write `Status: DONE_WITH_CONCERNS`, note the dispatch failure explicitly, and let the orchestrating session dispatch code-reviewer.
-8. After code-reviewer returns DONE, dispatch `commit` via Agent tool:
-   > "Create a semantic commit for the bug fix: [describe the root cause and fix]."
-   Do NOT return to the calling session before dispatching commit.
-   **`CAST_COMMIT_AGENT=1` is reserved for the `commit` agent and the human operator — never use it directly.** If your dispatch says "do not commit," leave changes staged and report via Status/files_changed. Every hatch use is audit-logged (`logs/audit.jsonl`, `COMMIT_HATCH_USED`); unauthorized use is a protocol violation.
-9. When this agent is part of a chain, include a `## Handoff` block BEFORE your Status block:
+7. Leave the fix and regression test in the working tree. The dispatching session runs `code-reviewer` (confirm: fix is minimal, addresses root cause, test fails on unfixed code) and `commit`. Report Status with a `## Recommended Next Agents` section. `CAST_COMMIT_AGENT=1` is reserved for the `commit` agent and the human operator — never use it.
+8. When this agent is part of a chain, include a `## Handoff` block BEFORE your Status block:
    ```
    ## Handoff
    files_changed: [list all files modified or created]
@@ -59,10 +51,15 @@ Focus on fixing the underlying issue, not the symptoms.
    blockers: none | [describe blocker]
    key_decisions: [root cause summary — useful for downstream reviewers]
    ```
-10. Do NOT write files under `~/.claude/agent-status/` yourself — Write/Edit there is denied by settings, and the policy gate ignores hand-written records. The SubagentStop hook records your verdict from your final `Status:` line, so make that line accurate.
-11. Output this completion report as your final response:
+9. Do NOT write files under `~/.claude/agent-status/` yourself — Write/Edit there is denied by settings, and the policy gate ignores hand-written records. The SubagentStop hook records your verdict from your final `Status:` line, so make that line accurate.
+10. Output this completion report as your final response:
 
 ---
+## Recommended Next Agents
+- code-reviewer: review the fix and regression test
+- commit: commit after review passes
+- test-runner: re-run tests (only if a suite should be re-verified)
+
 Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 Summary: [root cause identified, fix applied at file:line, regression test written]
 Files changed: [list all modified/created files]
@@ -75,7 +72,7 @@ Context needed: [required if NEEDS_CONTEXT — describe what information is miss
 - Root cause: [one sentence]
 - Fix: [file:line — describe the change in ≤1 sentence]
 - Regression test: [test file path + pass/fail]
-- code-reviewer: [DONE | DONE_WITH_CONCERNS]
+- code-reviewer: not run by this agent; the dispatching session runs it
 
 After the human-readable block above, also emit a machine-readable JSON payload:
 
@@ -134,7 +131,7 @@ I confirmed route.sh is executable and routing-table.json has the entry.
 **Edge cases:**
 - If debugger returns BLOCKED: likely environmental (missing file, wrong path, permissions)
 - For TypeScript/ESLint/build errors: debugger handles these directly — diagnose the compiler output and fix the source
-- Debugger self-dispatches code-reviewer after fixes — do NOT re-dispatch from orchestrating session
+- The orchestrating session dispatches code-reviewer and commit after the fix.
 
 ## Memory Integration
 
