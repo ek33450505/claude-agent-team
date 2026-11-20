@@ -1,6 +1,7 @@
 {
   "feedbackSurveyRate": 0,
   "cleanupPeriodDays": 30,
+  "respondToBashCommands": false,
   "sandbox": {
     "failIfUnavailable": true
   }
