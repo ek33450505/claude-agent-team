@@ -175,6 +175,20 @@ This writes the feed keys (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, the OTLP exporters 
 
 **Do NOT add `CLAUDE_CODE_ENABLE_TELEMETRY=1` to `settings.json`** for daily interactive use — without a collector running, this produces console metric noise on every session.
 
+### OTel Event Report (read-only)
+
+`python3 scripts/cast-otel-report.py [--days N] [--section tool_decision|cache|hooks|workflow|safety|all] [--limit N] [--json]` summarises the `otel_events` rows the collector already stores (7-day retention). It opens cast.db read-only and exits 1 on a missing DB, a missing `otel_events` table or any sqlite error (an empty window prints `(no rows in window)` and exits 0). With `--json` the output is always valid JSON (`{"error": ...}` on failure).
+
+| Section | Content |
+|---|---|
+| `tool_decision` | counts by `permission_mode` x `classifier_verdict` x `decision` x `source` (missing attributes show as `-`) |
+| `cache` | per day: requests, input/output/cache-read/5m-cache/1h-cache tokens, cost_usd |
+| `hooks` | per `hook_name`: executions, avg duration, stdout and context chars, oversized outputs persisted, blocking count |
+| `workflow` | `api_request` cost roll-up per `workflow.run_id` (name, requests, cost, models, first/last seen) |
+| `safety` | count of `safety_event` rows |
+
+**Finding (2026-11-20): no `safety_event` rows ever land.** Zero rows exist, including after a PreToolUse hook rejected a Bash call; that rejection DID land as a `tool_decision` row with `decision=reject`. The collector stores any `event.name` unfiltered, so Claude Code 2.1.311 is not exporting `claude_code.safety_event` on the logs pipeline in this config (possibly traces-only; `OTEL_TRACES_EXPORTER` is not set). Zero safety events does not mean nothing was blocked: use the `decision=reject` count in the `tool_decision` section as the proxy.
+
 ### Deprecation Candidates
 
 The following cast.db columns track data that native OTel also covers (once a collector is running). They are **NOT dropped now** — 15+ scripts read/write them and the dashboard depends on them.
