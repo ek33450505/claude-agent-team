@@ -88,12 +88,17 @@ echo ""
 #   A1: return-type annotation:    def foo() -> Foo | Bar:
 #       grep: `.* -> [A-Za-z].*[|]`
 #   A2: parameter/variable annot:  x: Foo | Bar (colon + upper/lower name + pipe)
-#       grep: `: [A-Za-z][A-Za-z0-9_\[\], ]*[|]`
+#       grep: A2_VAR (column-0 `x: A | B`) and A2_DEF (def params), see below
 #
 # Using [|] instead of bare | avoids ERE alternation (| is meta in ERE).
 # ---------------------------------------------------------------------------
 echo "=== Check A: PEP-604 annotation pipes without 'from __future__ import annotations' ==="
 CLASS_A_HITS=()
+# NOTE: `]` must come FIRST in a bracket expression; ERE has no backslash escapes
+# inside [...], so the old `[A-Za-z0-9_\\[\\], ]` closed early and never matched.
+A2_VAR='^[A-Za-z_][A-Za-z0-9_]*: [A-Za-z][]A-Za-z0-9_[, .]*[|]'
+A2_DEF='^[[:space:]]*(async )?def .*[(,][[:space:]]*[A-Za-z_][A-Za-z0-9_]*: [A-Za-z][]A-Za-z0-9_[, .]*[|]'
+A3_FIELD='^    [A-Za-z_][A-Za-z0-9_]*: [A-Za-z][]A-Za-z0-9_[, .]*[|]'
 
 for f in "${PY_FILES[@]}"; do
     relpath="${f#"$REPO_ROOT/"}"
@@ -103,10 +108,28 @@ for f in "${PY_FILES[@]}"; do
     # A1: return-type annotations:  -> SomeType | OtherType
     hits_a1="$(grep -nE -e '.* -> [A-Za-z].*[|]' "$f" 2>/dev/null || true)"
     # A2: parameter/variable annotations:  varname: SomeType | OtherType
-    #     Require `: ` + letter/digit then optional type chars then `|`
-    hits_a2="$(grep -nE -e ': [A-Za-z][A-Za-z0-9_\[\], ]*[|]' "$f" 2>/dev/null || true)"
+    #     Only evaluated positions: column-0 variable annotations and single-line
+    #     def parameters. Function-local annotations (indented) are never
+    #     evaluated by Python 3.9 (PEP 526), and string literals are skipped.
+    hits_a2="$(grep -nE -e "$A2_VAR" -e "$A2_DEF" "$f" 2>/dev/null || true)"
 
-    combined="${hits_a1}"$'\n'"${hits_a2}"
+    # A3: class-body field annotations (indent 4 under a column-0 `class`) are
+    #     evaluated at class creation on 3.9; method-local ones (indent 8) are not.
+    #     Triple-quoted strings (docstring prose) are skipped; a column-0 closing
+    #     bracket of a multi-line class header does not end the class context.
+    hits_a3="$(awk -v pat="$A3_FIELD" '
+        {
+            t = $0; nd = gsub(/"""/, "", t)
+            t = $0; ns = gsub(/\047\047\047/, "", t)
+            odd = ((nd + ns) % 2 == 1)
+        }
+        inq { if (odd) inq = 0; next }
+        /^(class |def |async def |@|[A-Za-z_])/ { top = $0 }
+        top ~ /^class / && $0 ~ pat { print NR ":" $0 }
+        odd { inq = 1 }
+    ' "$f" 2>/dev/null || true)"
+
+    combined="${hits_a1}"$'\n'"${hits_a2}"$'\n'"${hits_a3}"
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         CLASS_A_HITS+=("  [missing-future-import] $relpath: $line")
@@ -124,8 +147,8 @@ fi
 #
 #   B1: isinstance(x, A | B)  — use [|] to avoid ERE alternation
 #   B2: Module-level ALL_CAPS type alias: ALIAS = TypeA | TypeB
-#       Pattern: ^[A-Z_][A-Z0-9_]* = [A-Za-z][A-Za-z0-9_\[\],]* [|] [A-Za-z]
-#       The narrow char class [A-Za-z0-9_\[\],] (no dot, quote, paren) naturally
+#       Pattern: ^[A-Z_][A-Z0-9_]* = [A-Za-z][]A-Za-z0-9_[,]* [|] [A-Za-z]
+#       The narrow char class []A-Za-z0-9_[,] (no dot, quote, paren) naturally
 #       excludes re.compile(...) calls and string literals, preventing false
 #       positives from regex pattern strings that contain `|`.
 # ---------------------------------------------------------------------------
@@ -146,7 +169,7 @@ for f in "${PY_FILES[@]}"; do
     fi
 
     # B2: module-level ALLCAPS = TypeA | TypeB (no quotes/parens between = and |)
-    hits_b2="$(grep -nE -e '^[A-Z_][A-Z0-9_]* = [A-Za-z][A-Za-z0-9_\[\],]* [|] [A-Za-z]' "$f" 2>/dev/null || true)"
+    hits_b2="$(grep -nE -e '^[A-Z_][A-Z0-9_]* = [A-Za-z][]A-Za-z0-9_[,]* [|] [A-Za-z]' "$f" 2>/dev/null || true)"
     if [[ -n "$hits_b2" ]]; then
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue

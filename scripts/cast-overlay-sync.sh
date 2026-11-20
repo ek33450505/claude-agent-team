@@ -22,6 +22,16 @@ set -euo pipefail
 # Guard: do not run recursively inside CAST subprocess chains
 [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]] && exit 0
 
+# Diagnostics: under `set -e` an unguarded failing command (or bash 3.2's
+# empty-array `set -u` error) used to exit non-zero with NO output (seen on the
+# GH macOS runner, audit T-5). Remember the last failing command and say so on
+# any non-zero exit.
+_OVERLAY_LAST_FAIL=""
+set -E
+trap '_OVERLAY_LAST_FAIL="line $LINENO: $BASH_COMMAND (rc=$?)"' ERR
+_rc=0
+trap '_rc=$?; if [[ "$_rc" -ne 0 ]]; then echo "cast-overlay-sync: exiting rc=$_rc; last failing command: ${_OVERLAY_LAST_FAIL:-none recorded}" >&2; fi' EXIT
+
 # Guard: every path below derives from HOME (log file, clone dir, source dir).
 # Cannot log here: the log path itself depends on HOME.
 if [[ -z "${HOME:-}" ]]; then
@@ -420,10 +430,13 @@ done
 info "Staging files..."
 
 # Stage the copied files from our array
-for dest_file in "${STAGED_FILES[@]}"; do
-  # Use -f/--force to override .gitignore for this repo's files
-  git add -f -- "$dest_file" 2>&1 | tee -a "$LOG_FILE"
-done
+# Length guard: bash 3.2 (macOS /bin/bash) aborts under `set -u` on an empty array.
+if [[ ${#STAGED_FILES[@]} -gt 0 ]]; then
+  for dest_file in "${STAGED_FILES[@]}"; do
+    # Use -f/--force to override .gitignore for this repo's files
+    git add -f -- "$dest_file" 2>&1 | tee -a "$LOG_FILE"
+  done
+fi
 
 # ============================================================================
 # Check if there's anything staged

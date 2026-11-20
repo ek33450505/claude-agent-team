@@ -4,11 +4,17 @@
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
+load 'helpers/setup'
 
 SCRIPT="${BATS_TEST_DIRNAME}/../scripts/cast-time-context-hook.sh"
 
 setup() {
+  setup_temp_home
   mkdir -p "${HOME}/.claude/logs"
+}
+
+teardown() {
+  teardown_temp_home
 }
 
 @test "output is valid JSON" {

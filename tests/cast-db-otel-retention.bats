@@ -203,14 +203,14 @@ _count_otel_indexes() {
 
 @test "(c) prune honours CAST_PRUNE_OTEL_DAYS override" {
   _create_otel_schema
-  # 10 days old — inside the 30-day default window, outside a 7-day override
+  # 5 days old — inside the 7-day default window, outside a 3-day override
   sqlite3 "$TEST_DB" "
-    INSERT INTO otel_events (session_id, received_at) VALUES ('s-10d', datetime('now', '-10 days'));
+    INSERT INTO otel_events (session_id, received_at) VALUES ('s-5d', datetime('now', '-5 days'));
   "
   local backup_dir
   backup_dir="$(mktemp -d)"
   export CAST_BACKUP_DIR="$backup_dir"
-  export CAST_PRUNE_OTEL_DAYS=7
+  export CAST_PRUNE_OTEL_DAYS=3
 
   run python3 "$PRUNE_SCRIPT"
   assert_success
@@ -218,6 +218,26 @@ _count_otel_indexes() {
   local remaining
   remaining=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM otel_events;")
   [ "$remaining" -eq 0 ]
+
+  rm -rf "$backup_dir"
+}
+
+@test "(c) default OTEL window is 7 days when CAST_PRUNE_OTEL_DAYS is unset" {
+  _create_otel_schema
+  sqlite3 "$TEST_DB" "
+    INSERT INTO otel_events (session_id, received_at) VALUES ('s-8d', datetime('now', '-8 days'));
+    INSERT INTO otel_events (session_id, received_at) VALUES ('s-6d', datetime('now', '-6 days'));
+  "
+  local backup_dir
+  backup_dir="$(mktemp -d)"
+  export CAST_BACKUP_DIR="$backup_dir"
+  unset CAST_PRUNE_OTEL_DAYS
+
+  run python3 "$PRUNE_SCRIPT"
+  assert_success
+
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM otel_events WHERE session_id='s-8d';")" -eq 0 ]
+  [ "$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM otel_events WHERE session_id='s-6d';")" -eq 1 ]
 
   rm -rf "$backup_dir"
 }

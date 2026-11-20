@@ -51,6 +51,18 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   exit 1
 fi
 
+# A key containing a quote, backslash, CR or LF would break out of the curl
+# config line (-K) that carries it, so refuse it.
+_cast_key_ok() {
+  case "$1" in *\"*) return 1 ;; *\\*) return 1 ;; *$'\r'*) return 1 ;; *$'\n'*) return 1 ;; esac
+  return 0
+}
+
+if ! _cast_key_ok "$ANTHROPIC_API_KEY"; then
+  echo "ERROR: ANTHROPIC_API_KEY contains a disallowed character (quote, backslash, CR or LF)" >&2
+  exit 1
+fi
+
 # Read prompt
 PROMPT="$(cat "$PROMPT_FILE")"
 
@@ -84,11 +96,18 @@ EOF
 )
 
 # Submit batch
-RESPONSE=$(curl -sf -X POST "https://api.anthropic.com/v1/messages/batches" \
-  -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+# The API key is passed via a curl config on a process-substitution fd (-K), so
+# it never appears in curl's argv (visible in `ps`). The body goes via a 0600
+# mktemp file removed by a trap.
+BODY_FILE="$(mktemp "${TMPDIR:-/tmp}/cast-batch-body.XXXXXX")"
+trap 'rm -f "$BODY_FILE"' EXIT
+printf '%s' "$PAYLOAD" > "$BODY_FILE"
+RESPONSE=$(curl -sf --connect-timeout 10 --max-time 120 \
+  -K <(printf 'header = "x-api-key: %s"\n' "$ANTHROPIC_API_KEY") \
+  -X POST "https://api.anthropic.com/v1/messages/batches" \
   -H "anthropic-version: 2023-06-01" \
   -H "content-type: application/json" \
-  -d "$PAYLOAD" 2>&1) || {
+  --data-binary "@${BODY_FILE}" 2>&1) || {
   echo "ERROR: Batch API request failed: $RESPONSE" >&2
   exit 1
 }

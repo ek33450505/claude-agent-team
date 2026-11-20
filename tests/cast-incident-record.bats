@@ -124,15 +124,6 @@ _write_fixture() {
   [ "$count" -eq 0 ]
 }
 
-@test "subprocess guard exits 0 immediately when CLAUDE_SUBPROCESS=1" {
-  # SKIPPED: cast-incident-record.sh had a CLAUDE_SUBPROCESS guard that exited 0 early.
-  # The consolidated cast-subagent-stop-hook.sh does NOT have this guard — SubagentStop
-  # fires in the parent session where CLAUDE_SUBPROCESS is never set, so no guard is
-  # needed or appropriate. This test documents a retired behavior.
-  # Un-skip condition: the SubagentStop hook re-gains a subprocess guard.
-  skip "SubagentStop hook has no subprocess guard; CLAUDE_SUBPROCESS is ignored (see W2-1 consolidation)"
-}
-
 @test "empty stdin exits 0 and inserts 0 rows" {
   run bash "$SCRIPT" </dev/null
   assert_success

@@ -49,6 +49,7 @@ import contextlib
 import json
 import gzip
 import sqlite3
+import time
 import traceback
 import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -272,58 +273,112 @@ def _parse_logs(payload: dict) -> list:
 # ---------------------------------------------------------------------------
 # DB insertion helpers
 # ---------------------------------------------------------------------------
-def _insert_metrics(rows: list) -> int:
-    """Insert otel_metrics rows. Returns count of successfully inserted rows."""
+_METRICS_SQL = (
+    'INSERT INTO otel_metrics (session_id, metric_name, value, unit, attributes, time_unix_nano) '
+    'VALUES (?, ?, ?, ?, ?, ?)'
+)
+_METRICS_COLS = ('session_id', 'metric_name', 'value', 'unit', 'attributes', 'time_unix_nano')
+_EVENTS_SQL = (
+    'INSERT INTO otel_events (session_id, event_name, prompt_id, severity, body, time_unix_nano) '
+    'VALUES (?, ?, ?, ?, ?, ?)'
+)
+_EVENTS_COLS = ('session_id', 'event_name', 'prompt_id', 'severity', 'body', 'time_unix_nano')
+
+
+class BatchLocked(Exception):
+    """A non-empty batch was dropped because the DB stayed locked/busy (retryable)."""
+
+
+def _open_batch_conn() -> sqlite3.Connection:
+    """Open one connection with the same path resolution + PRAGMAs as _db_execute."""
+    if _USE_CAST_DB and _cast_db is not None:
+        return _cast_db._connect()
+    db_path = os.environ.get('CAST_DB_PATH', str(Path.home() / '.claude' / 'cast.db'))
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=5)
+    conn.execute('PRAGMA journal_mode=WAL;')
+    return conn
+
+
+def _insert_batch(sql: str, cols: tuple, rows: list) -> int:
+    """Insert rows in ONE connection + ONE transaction (executemany).
+
+    Returns rows inserted. If the batch fails (e.g. one malformed row), the
+    transaction rolls back and rows are retried one by one so a single bad row
+    does not lose the rest. Raises BatchLocked (only) when the DB stays locked/busy
+    after one retry; the HTTP handler turns that into a retryable 503.
+    """
+    if not rows:
+        return 0
+    try:
+        params = [tuple(row[c] for c in cols) for row in rows]
+    except Exception as e:
+        params = None
+        _log(f'batch param build failed, falling back to per-row: {e}')
+    if params is not None:
+        for attempt in range(2):
+            try:
+                with contextlib.closing(_open_batch_conn()) as conn, conn:
+                    conn.executemany(sql, params)
+                return len(params)
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if 'locked' in msg or 'busy' in msg:
+                    # Contention, not a bad row: per-row retries would stall the handler.
+                    if attempt == 0:
+                        time.sleep(0.25)
+                        continue
+                    _log(f'batch insert locked twice, dropping {len(rows)} rows: {e}', level='ERROR')
+                    raise BatchLocked(str(e)) from e
+                _log(f'batch insert failed ({len(rows)} rows), falling back to per-row: {e}')
+                break
+            except Exception as e:
+                _log(f'batch insert failed ({len(rows)} rows), falling back to per-row: {e}')
+                break
     count = 0
     for row in rows:
-        ok = _db_execute(
-            'INSERT INTO otel_metrics (session_id, metric_name, value, unit, attributes, time_unix_nano) '
-            'VALUES (?, ?, ?, ?, ?, ?)',
-            (
-                row['session_id'], row['metric_name'], row['value'],
-                row['unit'], row['attributes'], row['time_unix_nano'],
-            ),
-        )
+        try:
+            ok = _db_execute(sql, tuple(row[c] for c in cols))
+        except Exception as e:
+            _log(f'skipping malformed row: {e}')
+            continue
         if ok:
             count += 1
     return count
+
+
+def _insert_metrics(rows: list) -> int:
+    """Insert otel_metrics rows. Returns count of successfully inserted rows."""
+    return _insert_batch(_METRICS_SQL, _METRICS_COLS, rows)
 
 
 def _insert_events(rows: list) -> int:
     """Insert otel_events rows. Returns count of successfully inserted rows."""
-    count = 0
-    for row in rows:
-        ok = _db_execute(
-            'INSERT INTO otel_events (session_id, event_name, prompt_id, severity, body, time_unix_nano) '
-            'VALUES (?, ?, ?, ?, ?, ?)',
-            (
-                row['session_id'], row['event_name'], row['prompt_id'],
-                row['severity'], row['body'], row['time_unix_nano'],
-            ),
-        )
-        if ok:
-            count += 1
-    return count
+    return _insert_batch(_EVENTS_SQL, _EVENTS_COLS, rows)
 
 
 # ---------------------------------------------------------------------------
 # Signal processors (parse + insert; fail-open)
 # ---------------------------------------------------------------------------
 def _process_metrics(payload: dict) -> int:
-    """Parse and insert OTLP metrics. Returns row count. Never raises."""
+    """Parse and insert OTLP metrics. Returns row count. Raises only BatchLocked."""
     try:
         rows = _parse_metrics(payload)
         return _insert_metrics(rows)
+    except BatchLocked:
+        raise
     except Exception as e:
         _log(f'Error processing metrics: {e}\n{traceback.format_exc()}')
         return 0
 
 
 def _process_logs(payload: dict) -> int:
-    """Parse and insert OTLP logs/events. Returns row count. Never raises."""
+    """Parse and insert OTLP logs/events. Returns row count. Raises only BatchLocked."""
     try:
         rows = _parse_logs(payload)
         return _insert_events(rows)
+    except BatchLocked:
+        raise
     except Exception as e:
         _log(f'Error processing logs: {e}\n{traceback.format_exc()}')
         return 0
@@ -332,7 +387,8 @@ def _process_logs(payload: dict) -> int:
 # ---------------------------------------------------------------------------
 # Bytes-level ingest (shared by HTTP handler and offline modes)
 # ---------------------------------------------------------------------------
-def ingest_bytes(raw: bytes, already_decompressed: bool = False) -> tuple:
+def ingest_bytes(raw: bytes, already_decompressed: bool = False,
+                 raise_on_lock: bool = False) -> tuple:
     """Decompress (if gzip), parse OTLP JSON, and insert into cast.db.
 
     Returns (metrics_count, events_count).  Fail-open: returns (0, 0) on
@@ -346,6 +402,10 @@ def ingest_bytes(raw: bytes, already_decompressed: bool = False) -> tuple:
             peak-memory doubling (~320 MiB at cap).  Offline callers
             (--ingest-file *.json.gz, --ingest-stdin) leave this False so
             the auto-detect handles .json.gz files transparently.
+
+    raise_on_lock: when True, raise BatchLocked AFTER both signals were attempted
+    if any batch was dropped on DB lock contention (HTTP uses this to return 503).
+    When False (offline modes) a lock-dropped batch just counts 0.
 
     Auto-detects gzip by magic bytes (\\x1f\\x8b) when already_decompressed is
     False; this handles offline .json.gz files read via --ingest-file /
@@ -379,11 +439,21 @@ def ingest_bytes(raw: bytes, already_decompressed: bool = False) -> tuple:
     metrics_count = 0
     events_count = 0
 
+    locked = False
     if 'resourceMetrics' in payload:
-        metrics_count = _process_metrics(payload)
+        try:
+            metrics_count = _process_metrics(payload)
+        except BatchLocked:
+            locked = True
 
     if 'resourceLogs' in payload:
-        events_count = _process_logs(payload)
+        try:
+            events_count = _process_logs(payload)
+        except BatchLocked:
+            locked = True
+
+    if locked and raise_on_lock:
+        raise BatchLocked('batch dropped on DB lock contention')
 
     # resourceSpans (/v1/traces) — silently ignored (beta deferred)
 
@@ -534,7 +604,13 @@ class OTLPHandler(BaseHTTPRequestHandler):
         # Pass already_decompressed=True when we header-gunzipped above so
         # ingest_bytes() skips its magic-byte re-detect.
         if self.path in ('/v1/metrics', '/v1/logs', '/v1/traces'):
-            ingest_bytes(raw_body, already_decompressed=header_decompressed)
+            try:
+                ingest_bytes(raw_body, already_decompressed=header_decompressed,
+                             raise_on_lock=True)
+            except BatchLocked:
+                # OTLP/HTTP: 503 (+ Retry-After) is retryable; 200 would make the loss final.
+                self._send_unavailable()
+                return
         else:
             _log(f'Unknown OTLP endpoint: {self.path}')
 
@@ -544,6 +620,14 @@ class OTLPHandler(BaseHTTPRequestHandler):
         """Return HTTP 200 with empty JSON object."""
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(b'{}')
+
+    def _send_unavailable(self) -> None:
+        """Return HTTP 503 + Retry-After so the exporter retries a lock-dropped batch."""
+        self.send_response(503)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Retry-After', '5')
         self.end_headers()
         self.wfile.write(b'{}')
 

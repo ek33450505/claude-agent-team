@@ -17,6 +17,7 @@ setup() {
   SHIM="$HOME/shim"
   mkdir -p "$SHIM"
   export CURL_LOG="$HOME/curl-argv.log"
+  export CURL_CFG="$HOME/curl-cfg.log"
   export CURL_BODY='{"id":"file_test123","type":"file"}'
   export CURL_FILE_CONTENT="downloaded-bytes"
   export CURL_RC=0
@@ -24,7 +25,11 @@ setup() {
 #!/usr/bin/env bash
 { printf 'ARGV-BEGIN\n'; for a in "$@"; do printf '%s\n' "$a"; done; printf 'ARGV-END\n'; } >> "$CURL_LOG"
 out=""; prev=""
-for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+for a in "$@"; do
+  [ "$prev" = "-o" ] && out="$a"
+  [ "$prev" = "-K" ] && cat "$a" >> "$CURL_CFG" 2>/dev/null
+  prev="$a"
+done
 if [ -n "$out" ]; then printf '%s' "$CURL_FILE_CONTENT" > "$out"; else printf '%s' "$CURL_BODY"; fi
 exit "${CURL_RC:-0}"
 STUB
@@ -70,7 +75,8 @@ printf '%s\n' '$FAKE_KEY'
 STUB
   run bash "$SCRIPT" delete file_x
   [ "$status" -eq 0 ]
-  [[ "$(_args)" == *"x-api-key: $FAKE_KEY"* ]]
+  [[ "$(_args)" == *"-K /dev/fd/"* ]]
+  [[ "$(_args)" != *"$FAKE_KEY"* ]]
 }
 
 @test "CLAUDE_SUBPROCESS=1 exits 0 without touching curl" {
@@ -90,7 +96,8 @@ STUB
   a="$(_args)"
   [[ "$a" == *"-X POST https://api.anthropic.com/v1/files "* ]]
   [[ "$a" == *"anthropic-beta: files-api-2025-04-14"* ]]
-  [[ "$a" == *"x-api-key: $FAKE_KEY"* ]]
+  [[ "$a" == *"-K /dev/fd/"* ]]
+  [[ "$a" != *"$FAKE_KEY"* ]]
   [[ "$a" == *"purpose=assistants"* ]]
   [[ "$a" == *"file=@"*"/doc.txt"* ]]
   [[ "$a" != *expires_in* ]]
@@ -106,9 +113,9 @@ STUB
 }
 
 @test "ANTHROPIC_API_BASE overrides the endpoint host" {
-  run env "ANTHROPIC_API_KEY=$FAKE_KEY" ANTHROPIC_API_BASE=http://shim.invalid bash "$SCRIPT" upload "$HOME/doc.txt"
+  run env "ANTHROPIC_API_KEY=$FAKE_KEY" ANTHROPIC_API_BASE=https://localhost:8443 bash "$SCRIPT" upload "$HOME/doc.txt"
   [ "$status" -eq 0 ]
-  [[ "$(_args)" == *"-X POST http://shim.invalid/v1/files "* ]]
+  [[ "$(_args)" == *"-X POST https://localhost:8443/v1/files "* ]]
 }
 
 @test "upload rejects a non-numeric --ttl before calling curl" {
@@ -263,7 +270,86 @@ STUB
   [ -s "$HOME/.claude/logs/hook-errors.log" ]
   run grep -rlF "$FAKE_KEY" "$HOME/.claude"
   [ "$status" -eq 1 ]
-  # control: the key IS in the curl shim's argv (it is sent as a header), so the search can find it
+  # control: curl was invoked (argv log exists) and the key is NOT in it (sent via -K config fd)
+  [ -s "$CURL_LOG" ]
   run grep -c -F "$FAKE_KEY" "$CURL_LOG"
-  [ "$output" -ge 1 ]
+  [ "$output" = "0" ]
+}
+
+@test "non-allowlisted ANTHROPIC_API_BASE is refused before any curl call" {
+  run env "ANTHROPIC_API_KEY=$FAKE_KEY" ANTHROPIC_API_BASE=https://evil.example.com bash "$SCRIPT" delete file_x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not allowed"* ]]
+  [ ! -e "$CURL_LOG" ]
+}
+
+@test "lookalike host api.anthropic.com.evil.com is refused" {
+  run env "ANTHROPIC_API_KEY=$FAKE_KEY" ANTHROPIC_API_BASE=https://api.anthropic.com.evil.com bash "$SCRIPT" delete file_x
+  [ "$status" -ne 0 ]
+  [ ! -e "$CURL_LOG" ]
+}
+
+@test "timeouts: connect on all; total cap only on delete (not upload/download)" {
+  run env "ANTHROPIC_API_KEY=$FAKE_KEY" bash "$SCRIPT" upload "$HOME/doc.txt"
+  [ "$status" -eq 0 ]
+  grep -qx -e '--connect-timeout' "$CURL_LOG" || grep -q -e '--connect-timeout' "$CURL_LOG"
+  run grep -q -e '--max-time' "$CURL_LOG"
+  [ "$status" -ne 0 ]
+  run grep -q -e '--speed-limit' "$CURL_LOG"
+  [ "$status" -eq 0 ]
+  : > "$CURL_LOG"
+  run env "ANTHROPIC_API_KEY=$FAKE_KEY" bash "$SCRIPT" download file_x "$HOME/out.bin"
+  [ "$status" -eq 0 ]
+  grep -q -e '--connect-timeout' "$CURL_LOG"
+  run grep -q -e '--max-time' "$CURL_LOG"
+  [ "$status" -ne 0 ]
+  run grep -q -e '--speed-limit' "$CURL_LOG"
+  [ "$status" -eq 0 ]
+  : > "$CURL_LOG"
+  run env "ANTHROPIC_API_KEY=$FAKE_KEY" bash "$SCRIPT" delete file_x
+  [ "$status" -eq 0 ]
+  grep -q -e '--connect-timeout' "$CURL_LOG"
+  grep -q -e '--max-time' "$CURL_LOG"
+}
+
+@test "the -K config carries the key header; argv does not" {
+  run env "ANTHROPIC_API_KEY=$FAKE_KEY" bash "$SCRIPT" delete file_x
+  [ "$status" -eq 0 ]
+  grep -qF "header = \"x-api-key: $FAKE_KEY\"" "$CURL_CFG"
+  run grep -qF "$FAKE_KEY" "$CURL_LOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "authority parse: every bypass shape is refused and curl is never invoked" {
+  local bad
+  for bad in 'https://api.anthropic.com:x@evil.example/v1' 'https://api.anthropic.com@evil.example' \
+    'https://localhost:8443@evil.example' 'https://api.anthropic.com:/x' 'https://api.anthropic.com:99999999' \
+    'https://api.anthropic.com.evil.example' 'http://api.anthropic.com'; do
+    run env "ANTHROPIC_API_KEY=$FAKE_KEY" "ANTHROPIC_API_BASE=$bad" bash "$SCRIPT" delete file_x
+    [ "$status" -ne 0 ]
+    [ ! -e "$CURL_LOG" ]
+  done
+}
+
+@test "authority parse: legitimate bases are accepted" {
+  local good
+  for good in 'https://api.anthropic.com' 'https://api.anthropic.com/v1' 'https://localhost:8443' 'https://localhost:8443/v1'; do
+    run env "ANTHROPIC_API_KEY=$FAKE_KEY" "ANTHROPIC_API_BASE=$good" bash "$SCRIPT" delete file_x
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "API key is never on curl argv for upload, download and delete" {
+  run env "ANTHROPIC_API_KEY=$FAKE_KEY" bash "$SCRIPT" upload "$HOME/doc.txt"
+  run env "ANTHROPIC_API_KEY=$FAKE_KEY" bash "$SCRIPT" download file_x "$HOME/out.bin"
+  run env "ANTHROPIC_API_KEY=$FAKE_KEY" bash "$SCRIPT" delete file_x
+  [ -s "$CURL_LOG" ]
+  run grep -c "$FAKE_KEY" "$CURL_LOG"
+  [ "$output" = "0" ]
+}
+
+@test "API key containing a quote is refused before curl" {
+  run env 'ANTHROPIC_API_KEY=bad"key' bash "$SCRIPT" delete file_x
+  [ "$status" -ne 0 ]
+  [ ! -e "$CURL_LOG" ]
 }

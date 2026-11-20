@@ -141,16 +141,25 @@ def _semantic_rerank(conn, rows, query, limit):
         qvec = cme.embed_text(query)
         if qvec is None:
             return None  # Ollama unreachable → fail-open
+        # One batched lookup instead of one query per FTS hit; original hit order is
+        # preserved because we iterate `rows` (not the query result) below.
+        keys = [(r.get("kind"), r.get("ref_id")) for r in rows]
+        vecs = {}
+        for i in range(0, len(keys), 200):  # stay well under SQLite's bound-variable limit
+            chunk = keys[i:i + 200]
+            clause = " OR ".join("(kind = ? AND ref_id = ?)" for _ in chunk)
+            params = [v for k in chunk for v in k]
+            for er in conn.execute(
+                f"SELECT kind, ref_id, vec FROM record_embed WHERE {clause}", params
+            ).fetchall():
+                vecs[(er["kind"], er["ref_id"])] = er["vec"]
         scored = []
         for r in rows:
-            er = conn.execute(
-                "SELECT vec FROM record_embed WHERE kind = ? AND ref_id = ?",
-                (r.get("kind"), r.get("ref_id")),
-            ).fetchone()
-            if er is None or er["vec"] is None:
+            vec = vecs.get((r.get("kind"), r.get("ref_id")))
+            if vec is None:
                 score = -1.0  # no embedding for this hit → sinks below scored ones (stable sort keeps FTS order among ties)
             else:
-                score = cme.cosine_similarity(qvec, cme.unpack_embedding(er["vec"]))
+                score = cme.cosine_similarity(qvec, cme.unpack_embedding(vec))
             scored.append((score, r))
         scored.sort(key=lambda t: t[0], reverse=True)  # Python sort is stable → FTS rank order preserved within equal scores
         return [r for _, r in scored[:limit]]

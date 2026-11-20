@@ -338,6 +338,7 @@ mkdir -p "$CLAUDE_DIR/backups"
 mkdir -p "$CLAUDE_DIR/agent-status"
 mkdir -p "$CLAUDE_DIR/config"
 mkdir -p "$CLAUDE_DIR/logs"
+chmod 700 "$CLAUDE_DIR/logs" 2>/dev/null || true
 mkdir -p "$CLAUDE_DIR/scripts"
 
 # Hook-ownership sentinel: when present, the CAST plugin's hooks defer to install.sh
@@ -625,6 +626,10 @@ rm -f "$CLAUDE_DIR/scripts/cast-plugin-install.sh" "$CLAUDE_DIR/scripts/cast-tmu
 rm -f "$CLAUDE_DIR/scripts/sync-ecosystem-readme.sh" "$CLAUDE_DIR/scripts/cast-morning-briefing-sdk.py"
 # Remove the session distiller and memory review TUI retired in v10.5.0
 rm -f "$CLAUDE_DIR/scripts/cast-session-distiller.py" "$CLAUDE_DIR/scripts/cast-memory-review.sh"
+# Remove scripts deleted from scripts/ in the 2026-07..11 sweeps (audit 2026-11-19)
+rm -f "$CLAUDE_DIR/scripts/cast-board.sh" "$CLAUDE_DIR/scripts/cast-command-guard.sh" "$CLAUDE_DIR/scripts/cast-compat.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-cwdchanged-hook.sh" "$CLAUDE_DIR/scripts/cast-filechanged-hook.sh" "$CLAUDE_DIR/scripts/cast-headless-guard.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-instructions-loaded-hook.sh" "$CLAUDE_DIR/scripts/cast-post-compact-hook.sh" "$CLAUDE_DIR/scripts/cast-stats.sh"
 # v7.5 Phase 7: removed dead reference skills
 rm -rf "$CLAUDE_DIR/skills/compact-discipline" "$CLAUDE_DIR/skills/thinking-budget"
 # Remove config retired in v7.5 Phase 6b (config-rot sweep, #152)

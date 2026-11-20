@@ -309,3 +309,28 @@ teardown() {
   assert_failure
   assert_output --partial "json dispatch"
 }
+
+@test "cast-exec: no predictable log/dir names in shared TMPDIR or /tmp (audit unit I)" {
+  run grep -nE '\$\{TMPDIR:-/tmp\}/cast-[a-z-]*(log|-\$\{|-last)|"/tmp/cast-wipe' "${BATS_TEST_DIRNAME}/../scripts/cast-exec.sh"
+  [ "$status" -eq 1 ]
+}
+
+@test "cast exec: symlinked logs dir is not used; reported log path is the file written, nothing lands directly in TMPDIR" {
+  local plan_file="$HOME/plan.md" verify_file="$HOME/output.txt"
+  local victim="$BATS_TEST_TMPDIR/victim-logs" tmp="$BATS_TEST_TMPDIR/shared-tmp"
+  mkdir -p "$victim" "$tmp"
+  rm -rf "$HOME/.claude/logs"
+  ln -s "$victim" "$HOME/.claude/logs"
+  echo content > "$verify_file"
+  _write_plan "$plan_file" "test-plan-logdir-$$" "$verify_file"
+
+  TMPDIR="$tmp" run bash "$EXEC_SH" "$plan_file"
+  assert_success
+  local logpath
+  logpath="$(printf '%s\n' "$output" | sed -n 's/.*(log: \(.*cast-exec-[^)]*\.log\)).*/\1/p' | head -1)"
+  [ -n "$logpath" ]
+  [ -f "$logpath" ]
+  [[ "$logpath" != "$victim"/* ]]
+  [ "$(ls "$victim" | wc -l | tr -d ' ')" = "0" ]
+  [ "$(find "$tmp" -maxdepth 1 -type f | wc -l | tr -d ' ')" = "0" ]
+}

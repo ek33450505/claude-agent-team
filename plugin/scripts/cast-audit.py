@@ -37,6 +37,7 @@ from __future__ import annotations
 import sys
 import json
 import os
+import re
 import hashlib
 import subprocess
 from datetime import datetime, timezone
@@ -557,7 +558,15 @@ def write_redact_map(session_id: str, timestamp: str, redact_result: dict) -> No
     """
     try:
         os.makedirs(REDACT_MAPS_DIR, exist_ok=True)
-        safe_ts = timestamp.replace(":", "-")
+        if os.path.islink(REDACT_MAPS_DIR):
+            _log_error("write_redact_map refused: REDACT_MAPS_DIR is a symlink")
+            return
+        os.chmod(REDACT_MAPS_DIR, 0o700)
+        # session_id comes from the hook payload: confine it to a safe filename
+        # component so "../" or "/" cannot escape REDACT_MAPS_DIR.
+        if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,64}", session_id):
+            session_id = "unknown"
+        safe_ts = re.sub(r"[^A-Za-z0-9._-]", "-", str(timestamp))
         path = os.path.join(REDACT_MAPS_DIR, f"{session_id}-{safe_ts}.json")
         raw_entities = redact_result.get("entities", []) or []
         entities = [
@@ -570,7 +579,15 @@ def write_redact_map(session_id: str, timestamp: str, redact_result: dict) -> No
             "session_id": session_id,
             "entities": entities,
         }
-        with open(path, "w") as f:
+        # O_NOFOLLOW: refuse a pre-planted symlink at the target; 0600 perms.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fchmod(fd, 0o600)  # tighten a pre-existing wider-mode file
+            f = os.fdopen(fd, "w")
+        except Exception:
+            os.close(fd)
+            raise
+        with f:
             json.dump(map_data, f)
     except Exception as e:
         _log_error(f"write_redact_map failed: {e}")

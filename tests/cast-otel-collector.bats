@@ -303,6 +303,25 @@ _start_collector_http() {
   return 1
 }
 
+# GH macOS runner-restriction signature (audit T-5). Returns 0 ONLY when ALL hold:
+#   1. GITHUB_ACTIONS=true on Darwin (the runner lane);
+#   2. the daemon pid is still ALIVE;
+#   3. the daemon's own log (written by _log under the temp HOME) contains
+#      "Listening on 127.0.0.1:<port>" -- i.e. it bound successfully and reached serve_forever;
+#   4. lsof confirms THAT pid holds a LISTEN socket on the port.
+# So the server is demonstrably up and only the client-side connect from the test
+# process was refused (runner network restriction). A genuine startup regression
+# (import error, crash, bind failure, never reaching listen) fails 2, 3 or 4.
+# MUST be called BEFORE _stop_collector_http (needs the live pid).
+_collector_runner_restricted() {
+  local port="$1"
+  [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ] || return 1
+  [[ -n "${COLLECTOR_HTTP_PID:-}" ]] && kill -0 "$COLLECTOR_HTTP_PID" 2>/dev/null || return 1
+  grep -qF "Listening on 127.0.0.1:${port} " "$HOME/.claude/logs/otel-collector.log" 2>/dev/null || return 1
+  lsof -nP -a -p "$COLLECTOR_HTTP_PID" -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 || return 1
+  return 0
+}
+
 _stop_collector_http() {
   local port="${1:-}"
   if [[ -n "${COLLECTOR_HTTP_PID:-}" ]]; then
@@ -326,6 +345,17 @@ _stop_collector_http() {
   fi
 }
 
+# Called after a failed _start_collector_http: stops the daemon, then skips on the
+# runner-restriction signature; otherwise returns so the caller can FAIL.
+_collector_stop_and_skip_if_restricted() {
+  local port="$1" restricted=0
+  _collector_runner_restricted "$port" && restricted=1
+  _stop_collector_http "$port"
+  if [ "$restricted" = "1" ]; then
+    skip "GH macOS runner restriction: daemon alive, logged Listening, lsof shows LISTEN, but client connect refused — audit T-5"
+  fi
+}
+
 @test "HTTP: chunked POST to /v1/logs is de-chunked, parsed, and lands in otel_events" {
   local port=48391
   if ! _start_collector_http "$port"; then
@@ -342,10 +372,7 @@ _stop_collector_http() {
       tail -20 "$BATS_TEST_TMPDIR/collector-http.log" 2>&1 | sed 's/^/# /'
       echo "# T-5 DIAG: lsof port: $(lsof -ti "tcp:$port" 2>&1 | tr '\n' ' ')"
     } >&3
-    _stop_collector_http "$port"
-    if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-      skip "collector slow to accept on GH macOS runner (2026-10-03 probe: pid alive and bound per lsof after 5s poll; window widened to 20s) — audit T-5"
-    fi
+    _collector_stop_and_skip_if_restricted "$port"
     false
   fi
 
@@ -380,9 +407,7 @@ print(resp.status)
 @test "HTTP: malformed chunk-size line is rejected with 400 (no hang, no crash)" {
   local port=48392
   if ! _start_collector_http "$port"; then
-    if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-      skip "collector daemon did not accept connections within the 20s window on GH macOS runner (attempt-first skip, only reached if daemon fails to start) — audit T-5"
-    fi
+    _collector_stop_and_skip_if_restricted "$port"
     false
   fi
 
@@ -407,9 +432,7 @@ print(resp.status)
 @test "HTTP: non-chunked Content-Length POST still works after chunked-decoding fix" {
   local port=48393
   if ! _start_collector_http "$port"; then
-    if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-      skip "collector daemon did not accept connections within the 20s window on GH macOS runner (attempt-first skip, only reached if daemon fails to start) — audit T-5"
-    fi
+    _collector_stop_and_skip_if_restricted "$port"
     false
   fi
 

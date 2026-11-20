@@ -39,7 +39,6 @@ used by the PreToolUse git guard. It never raises and returns results/counts/wou
 Python 3.9 compatible, stdlib only.
 """
 import datetime
-import hashlib
 import importlib.util
 import json
 import os

@@ -68,7 +68,7 @@ destructive operations.
 Retention:
   CAST_DB_PRUNE_DAYS  (default 90) — routing_events + agent_runs (steps 1-2) and
   review_snapshots/review_snapshot_files/review_gate_decisions (steps 5-6).
-  CAST_PRUNE_OTEL_DAYS (default 10) — otel_events + otel_metrics (steps 3-4).
+  CAST_PRUNE_OTEL_DAYS (default 7) — otel_events + otel_metrics (steps 3-4).
   The OTLP feed is high-volume and low-half-life, so it defaults to a tighter
   window. Set either lower to prune more aggressively, higher to retain more.
 
@@ -159,7 +159,7 @@ def _parse_args(argv) -> argparse.Namespace:
 DB_PATH: str = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
 DAYS: int = _parse_retention_days('CAST_DB_PRUNE_DAYS', 90)
 # OTLP feed (otel_events/otel_metrics) is high-volume; default to a tighter window.
-OTEL_DAYS: int = _parse_retention_days('CAST_PRUNE_OTEL_DAYS', 10)
+OTEL_DAYS: int = _parse_retention_days('CAST_PRUNE_OTEL_DAYS', 7)
 DRY_RUN: bool = os.environ.get('CAST_DB_PRUNE_DRY_RUN', '0') == '1'
 LOG_PATH: str = os.path.expanduser('~/.claude/logs/cron-db-prune.log')
 
