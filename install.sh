@@ -630,6 +630,8 @@ rm -f "$CLAUDE_DIR/scripts/cast-session-distiller.py" "$CLAUDE_DIR/scripts/cast-
 rm -f "$CLAUDE_DIR/scripts/cast-board.sh" "$CLAUDE_DIR/scripts/cast-command-guard.sh" "$CLAUDE_DIR/scripts/cast-compat.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-cwdchanged-hook.sh" "$CLAUDE_DIR/scripts/cast-filechanged-hook.sh" "$CLAUDE_DIR/scripts/cast-headless-guard.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-instructions-loaded-hook.sh" "$CLAUDE_DIR/scripts/cast-post-compact-hook.sh" "$CLAUDE_DIR/scripts/cast-stats.sh"
+# Remove the cast exec plan executor retired in v10.8.0 (never used; /orchestrate replaces it)
+rm -f "$CLAUDE_DIR/scripts/cast-exec.sh"
 # v7.5 Phase 7: removed dead reference skills
 rm -rf "$CLAUDE_DIR/skills/compact-discipline" "$CLAUDE_DIR/skills/thinking-budget"
 # Remove config retired in v7.5 Phase 6b (config-rot sweep, #152)

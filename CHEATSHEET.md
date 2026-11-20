@@ -81,7 +81,6 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | Subcommand | Description | Key Flags |
 |---|---|---|
 | `cast status` | Terminal health dashboard | `--json` |
-| `cast exec <plan>` | Execute a plan manifest | `--resume`, `--status` |
 | `cast memory search` | Search agent memories | `--agent`, `--project`, `--limit` |
 | `cast memory list` | List all agent memories | `--agent`, `--type` |
 | `cast memory forget <id>` | Delete a memory entry | |

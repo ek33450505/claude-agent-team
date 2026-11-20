@@ -4,7 +4,7 @@
 #
 # Usage: cast <subcommand> [args] [--json] [--quiet] [--verbose]
 #
-# Subcommands: status, exec, parallel, memory, budget, agents, review, hooks, doctor, upgrade-check, tidy, clean, dash, install-completions, plan-doctor
+# Subcommands: status, parallel, memory, budget, agents, review, hooks, doctor, upgrade-check, tidy, clean, dash, install-completions, plan-doctor
 #
 # Config: ~/.claude/config/cast-cli.json
 # DB:     $CAST_DB_PATH or ~/.claude/cast.db
@@ -202,7 +202,6 @@ Subcommands:
   ${C_BOLD}init-repo${C_RESET}                       Initialize CAST config for this repo
   ${C_BOLD}new-agent${C_RESET}  <name>                  Scaffold a new agent frontmatter file
   ${C_BOLD}status${C_RESET}                          Terminal health dashboard
-  ${C_BOLD}exec${C_RESET}      [--resume|--status] <plan>  Execute a plan manifest
   ${C_BOLD}parallel${C_RESET}  [--dry-run] [--split N] <plan>  Split plan across parallel worktrees
   ${C_BOLD}dispatch${C_RESET}  [--managed] <agent> <prompt>  Dispatch an agent task
   ${C_BOLD}test${C_RESET}      [agent-name] [--record] [--ci]  Run agent contract tests
@@ -4690,63 +4689,6 @@ USAGE
   fi
 }
 
-# ── Subcommand: exec ─────────────────────────────────────────────────────────
-_cmd_exec() {
-  local mode_flag=""
-  local plan_file=""
-
-  while [ "${#}" -gt 0 ]; do
-    case "$1" in
-      --resume) mode_flag="--resume"; shift ;;
-      --status) mode_flag="--status"; shift ;;
-      --help|-h)
-        cat <<USAGE
-Usage: cast exec [--resume | --status] <plan-file>
-
-  <plan-file>            Execute all batches defined in the plan manifest
-  --resume <plan-file>   Skip completed batches, resume from first non-complete
-  --status <plan-file>   Print current checkpoint state and exit
-USAGE
-        return 0
-        ;;
-      -*)
-        _error "Unknown flag: $1"
-        return 1
-        ;;
-      *)
-        if [ -z "$plan_file" ]; then
-          plan_file="$1"
-        else
-          _error "Unexpected argument: $1"
-          return 1
-        fi
-        shift
-        ;;
-    esac
-  done
-
-  if [ -z "$plan_file" ]; then
-    _error "Plan file is required."
-    printf "  Usage: cast exec [--resume|--status] <plan-file>\n" >&2
-    return 1
-  fi
-
-  local exec_script="${CAST_SCRIPTS_DIR}/cast-exec.sh"
-  if [ ! -f "$exec_script" ]; then
-    exec_script="${CAST_REPO_DIR}/scripts/cast-exec.sh"
-  fi
-  if [ ! -f "$exec_script" ]; then
-    _error "cast-exec.sh not found"
-    return 1
-  fi
-
-  if [ -n "$mode_flag" ]; then
-    bash "$exec_script" "$mode_flag" "$plan_file"
-  else
-    bash "$exec_script" "$plan_file"
-  fi
-}
-
 # ── Subcommand: tidy ────────────────────────────────────────────────────────
 _cmd_tidy() {
   local dry_run=0
@@ -6003,11 +5945,16 @@ fi
 SUBCOMMAND="${1:-}"
 shift 2>/dev/null || true
 
+# Retired subcommands refuse with a pointer instead of falling through to
+# "unknown subcommand". Kept outside the dispatch table so completions drop them.
+if [ "$SUBCOMMAND" = "exec" ]; then
+  printf 'cast exec was retired in v10.8.0; use /orchestrate\n' >&2
+  exit 2
+fi
 case "$SUBCOMMAND" in
   init-repo)            _cmd_init_repo "$@" ;;
   new-agent)            _cmd_new_agent "$@" ;;
   status)               _cmd_status "$@" ;;
-  exec)                 _cmd_exec "$@" ;;
   dispatch)             _cmd_dispatch "$@" ;;
   parallel)
     parallel_script="${CAST_SCRIPTS_DIR}/cast-parallel.sh"
