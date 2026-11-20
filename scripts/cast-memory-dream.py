@@ -325,67 +325,73 @@ def phase_gather(project_id, transcripts_since, max_transcripts,
     for mtime, fpath in jsonl_files:
         file_date = datetime.fromtimestamp(mtime, tz=timezone.utc)
         try:
-            with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
-                lines = f.readlines()
+            f = open(fpath, 'r', encoding='utf-8', errors='replace')
         except (OSError, PermissionError):
             continue
 
+        # Stream line by line: transcripts can be multi-MB; readlines() held them all.
+        file_signals = []
+        try:
+            with f:
+                for line_no, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # F5: skip oversized lines to prevent OOM before json.loads
+                    if len(line) > 1_000_000:
+                        _maybe_log_failure(
+                            'cast-memory-dream', 0,
+                            f'phase_gather: skipping oversized line {line_no} ({len(line)} bytes) in {fpath}'
+                        )
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    msg_type = obj.get('type')
+                    if msg_type not in ('user', 'assistant'):
+                        continue
+
+                    # Extract text from message.content
+                    message = obj.get('message', {})
+                    content = message.get('content', '')
+                    if isinstance(content, list):
+                        # Content may be a list of blocks
+                        text_parts = []
+                        for block in content:
+                            if isinstance(block, dict):
+                                text_parts.append(block.get('text', ''))
+                            elif isinstance(block, str):
+                                text_parts.append(block)
+                        text = ' '.join(text_parts)
+                    elif isinstance(content, str):
+                        text = content
+                    else:
+                        continue
+
+                    if not text:
+                        continue
+
+                    for group, pattern in SIGNAL_PATTERNS.items():
+                        if group not in instruction_groups:
+                            continue
+                        match = pattern.search(text)
+                        if match:
+                            snippet = text[max(0, match.start() - 40):match.end() + 80].strip()
+                            file_signals.append({
+                                'transcript_path': fpath,
+                                'transcript_mtime': mtime,
+                                'transcript_date': file_date.strftime('%Y-%m-%d'),
+                                'line_no': line_no,
+                                'msg_type': msg_type,
+                                'snippet': snippet[:300],
+                                'pattern_group': group,
+                            })
+        except OSError:
+            continue  # read error mid-file: skip it entirely (not counted, no partial signals)
         transcripts_used.append(fpath)
-        for line_no, line in enumerate(lines, 1):
-            line = line.strip()
-            if not line:
-                continue
-            # F5: skip oversized lines to prevent OOM before json.loads
-            if len(line) > 1_000_000:
-                _maybe_log_failure(
-                    'cast-memory-dream', 0,
-                    f'phase_gather: skipping oversized line {line_no} ({len(line)} bytes) in {fpath}'
-                )
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            msg_type = obj.get('type')
-            if msg_type not in ('user', 'assistant'):
-                continue
-
-            # Extract text from message.content
-            message = obj.get('message', {})
-            content = message.get('content', '')
-            if isinstance(content, list):
-                # Content may be a list of blocks
-                text_parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        text_parts.append(block.get('text', ''))
-                    elif isinstance(block, str):
-                        text_parts.append(block)
-                text = ' '.join(text_parts)
-            elif isinstance(content, str):
-                text = content
-            else:
-                continue
-
-            if not text:
-                continue
-
-            for group, pattern in SIGNAL_PATTERNS.items():
-                if group not in instruction_groups:
-                    continue
-                match = pattern.search(text)
-                if match:
-                    snippet = text[max(0, match.start() - 40):match.end() + 80].strip()
-                    signals.append({
-                        'transcript_path': fpath,
-                        'transcript_mtime': mtime,
-                        'transcript_date': file_date.strftime('%Y-%m-%d'),
-                        'line_no': line_no,
-                        'msg_type': msg_type,
-                        'snippet': snippet[:300],
-                        'pattern_group': group,
-                    })
+        signals.extend(file_signals)
 
     # Flag stale path references in existing memory files
     stale_paths = set()

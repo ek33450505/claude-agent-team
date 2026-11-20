@@ -52,6 +52,9 @@ def _load_embed_module():
 
 MAX_BODY = 4_000       # chars — bounds large DB rows
 MAX_FILE_BODY = 8_000  # chars per chunk — files are split into chunks for full-content indexing
+EMBED_PAGE_SIZE = 500  # keyset page size for _embed_pending
+EMBED_MAX_CONSECUTIVE_FAILURES = 3  # circuit breaker: stop the run when Ollama is down
+EMBED_PROBE_TEXT = "cast health probe"  # known-good input for the breaker's liveness probe
 MAX_EMBED_INPUT = 8_000  # chars fed to the embedder (nomic context safety)
 
 
@@ -669,35 +672,78 @@ def _embed_pending(rebuild: bool, kind: Optional[str] = None) -> int:
         else:
             cast_db.db_execute("DELETE FROM record_embed", ())
 
-    rows = cast_db.db_query(
-        "SELECT f.kind AS kind, f.ref_id AS ref_id, f.ts AS ts, f.title AS title, f.body AS body "
-        "FROM record_fts f "
-        "WHERE NOT EXISTS (SELECT 1 FROM record_embed e WHERE e.kind = f.kind AND e.ref_id = f.ref_id)",
-        (),
-    )
     embedded = 0
     skipped = 0
-    for raw in rows:
-        row = _row_to_dict(raw)
-        kind = str(row.get("kind") or "")
-        ref_id = str(row.get("ref_id") or "")
-        if not kind or not ref_id:
-            continue
-        ts = str(row.get("ts") or "")
-        text = (str(row.get("title") or "") + " " + str(row.get("body") or "")).strip()[:MAX_EMBED_INPUT]
-        if not text:
-            continue
-        vec = cme.embed_text(text)
-        if vec is None:
-            skipped += 1
-            continue
-        blob = cme.pack_embedding(vec)
-        cast_db.db_execute(
-            "INSERT OR REPLACE INTO record_embed(kind, ref_id, vec, ts) VALUES (?, ?, ?, ?)",
-            (kind, ref_id, blob, ts),
-        )
-        embedded += 1
-    if skipped and embedded == 0:
+    consecutive_failures = 0
+    tripped = False
+    last_rowid = 0
+    # Page on record_fts.rowid (keyset) over ONE connection: loading every un-embedded
+    # row with its body at once cost ~153 MB live, and a connection per row was slower still.
+    try:
+        conn = cast_db._connect()
+    except Exception as exc:
+        print(f"embed: cannot open database ({exc}) — semantic layer skipped", file=sys.stderr)
+        return 0
+    try:
+        while not tripped:
+            page = conn.execute(
+                "SELECT f.rowid AS rid, f.kind AS kind, f.ref_id AS ref_id, f.ts AS ts, "
+                "f.title AS title, f.body AS body "
+                "FROM record_fts f "
+                "WHERE f.rowid > ? "
+                "AND NOT EXISTS (SELECT 1 FROM record_embed e WHERE e.kind = f.kind AND e.ref_id = f.ref_id) "
+                "ORDER BY f.rowid LIMIT ?",
+                (last_rowid, EMBED_PAGE_SIZE),
+            ).fetchall()
+            if not page:
+                break
+            for raw in page:
+                row = _row_to_dict(raw)
+                last_rowid = raw["rid"]
+                kind = str(row.get("kind") or "")
+                ref_id = str(row.get("ref_id") or "")
+                if not kind or not ref_id:
+                    continue
+                ts = str(row.get("ts") or "")
+                text = (str(row.get("title") or "") + " " + str(row.get("body") or "")).strip()[:MAX_EMBED_INPUT]
+                if not text:
+                    continue
+                vec = cme.embed_text(text)
+                if vec is None:
+                    skipped += 1
+                    consecutive_failures += 1
+                    if consecutive_failures >= EMBED_MAX_CONSECUTIVE_FAILURES:
+                        # embed_text() returns None on ANY error, including a deterministic
+                        # per-input rejection. Probe with a known-good string to tell a bad
+                        # row (service up: skip, keep paging) from a dead service (stop).
+                        if cme.embed_text(EMBED_PROBE_TEXT) is None:
+                            print(
+                                f"embed: stopping after {consecutive_failures} consecutive embedding "
+                                f"failures and a failed probe (Ollama down or timing out); "
+                                f"{embedded} embedded this run",
+                                file=sys.stderr,
+                            )
+                            tripped = True
+                            break
+                        consecutive_failures = 0
+                    continue
+                consecutive_failures = 0
+                blob = cme.pack_embedding(vec)
+                conn.execute(
+                    "INSERT OR REPLACE INTO record_embed(kind, ref_id, vec, ts) VALUES (?, ?, ?, ?)",
+                    (kind, ref_id, blob, ts),
+                )
+                conn.commit()  # per row: never hold the write lock across a slow Ollama call
+                embedded += 1
+    except sqlite3.Error as exc:
+        print(f"embed: database error ({exc}) — stopping", file=sys.stderr)
+    finally:
+        try:
+            conn.commit()
+        except sqlite3.Error:
+            pass
+        conn.close()
+    if skipped and embedded == 0 and not tripped:
         print(f"embed: 0 embedded, {skipped} skipped (Ollama unavailable?)", file=sys.stderr)
     return embedded
 
