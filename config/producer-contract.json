@@ -56,7 +56,7 @@
     },
     {
       "table": "routing_events",
-      "writers": ["cast-user-prompt-hook.sh:169", "cast-model-switch-hook.sh:81", "cast_subagent_stop.py:3034", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
+      "writers": ["cast-user-prompt-hook.sh:169", "cast-model-switch-hook.sh:82", "cast_subagent_stop.py:3034", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
       "cadence": "per_event",
       "status": "live"
     },

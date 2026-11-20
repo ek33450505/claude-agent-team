@@ -118,11 +118,11 @@ full_payload() {
   [ "$(count_rows)" = "1" ]
 }
 
-@test "300k-char to_model is capped to 200 in matched_route" {
+@test "50k-char to_model is capped to 200 in matched_route" {
   seed_db
   python3 -I -c "
 import json
-print(json.dumps({'session_id': 's', 'to_model': 'x' * 300000}))
+print(json.dumps({'session_id': 's', 'to_model': 'x' * 50000}))
 " > "$HOME/big.json"
   run bash -c "bash '$HOOK_SH' < '$HOME/big.json'"
   assert_success

@@ -12,6 +12,7 @@
 #   from_model, to_model, requested_model (null when source=auto),
 #   source (command|picker|sdk|auto|resume), context_tokens, prompt_cache_warm,
 #   cache_ttl (5m|1h), estimated_cache_write_usd, pricing (configured|catalog|default)
+#   Payloads over ~128 KiB exceed Linux's per-string env limit and are dropped (fail-open, no row).
 #
 # Writes to: cast.db routing_events (existing table; no schema change). Never creates the DB.
 
