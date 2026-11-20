@@ -163,10 +163,6 @@ _require_db() {
   fi
 }
 
-_db() {
-  sqlite3 "$CAST_DB_PATH" "$@"
-}
-
 _parse_global_flags() {
   local remaining=()
   while [ "${#}" -gt 0 ]; do
@@ -1314,7 +1310,7 @@ _memory_search() {
 
   # Lazy-refresh the memory index so freshly-written memories are searchable (fail-open).
   if [ -f "$index_script" ]; then
-    bash -c "python3 \"$index_script\" --kind memory >/dev/null 2>&1" || true
+    python3 "$index_script" --kind memory >/dev/null 2>&1 || true
   fi
 
   local args=("$query" "--kind" "memory" "--limit" "$limit")
@@ -5629,7 +5625,7 @@ _cmd_ask() {
   fi
 
   if [ "$no_refresh" -eq 0 ] && [ -f "$index_script" ]; then
-    bash -c "python3 \"$index_script\" >/dev/null 2>&1" || true
+    python3 "$index_script" >/dev/null 2>&1 || true
   fi
 
   # Resolve query backend
