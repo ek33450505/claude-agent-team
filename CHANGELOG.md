@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.8.0] — 2026-11-20
+
 **Upgrading:** run `bash install.sh`. Every `managed-settings.d` fragment shipped in the repo is now overwritten on
 reinstall (a differing copy is backed up at mode 600), so hand edits to any shipped fragment (`00-env.json` through
 `61-sandbox.json`) are reverted; keep personal overrides in a fragment that sorts last, such as

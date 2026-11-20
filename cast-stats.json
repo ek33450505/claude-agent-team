@@ -1,6 +1,6 @@
 {
-  "version": "10.7.0",
-  "versionTag": "v10.7.0",
+  "version": "10.8.0",
+  "versionTag": "v10.8.0",
   "agents": 27,
   "tests": 4881,
   "test_files": 265,
