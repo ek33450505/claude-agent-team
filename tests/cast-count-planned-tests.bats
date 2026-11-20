@@ -5,6 +5,8 @@ load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 COUNT_SCRIPT="$REPO_DIR/scripts/cast-count-planned-tests.sh"
+# Declaration token built at runtime so no fixture line carries the literal at-test token.
+T="$(printf '%stest' '@')"
 
 setup() {
   # Temp dir for fixture files (not touching real home)
@@ -27,15 +29,15 @@ teardown() {
     '' \
     'load '"'"'test_helper'"'"'' \
     '' \
-    '@test "first test" {' \
+    "${T}"' "first test" {' \
     '  echo "test 1"' \
     '}' \
     '' \
-    '@test "second test" {' \
+    "${T}"' "second test" {' \
     '  echo "test 2"' \
     '}' \
     '' \
-    '@test "third test" {' \
+    "${T}"' "third test" {' \
     '  echo "test 3"' \
     '}' \
     > "$fixture"
@@ -54,18 +56,18 @@ teardown() {
   printf '%s\n' \
     '#!/usr/bin/env bats' \
     '' \
-    '# This is a comment that mentions @test inside the comment' \
-    '# but @test should not be counted here' \
+    '# This is a comment that mentions '"${T}"' inside the comment' \
+    '# but '"${T}"' should not be counted here' \
     '' \
-    '@test "real test 1" {' \
+    "${T}"' "real test 1" {' \
     '  echo "test 1"' \
     '}' \
     '' \
-    '# @test "fake test in comment" {' \
+    '# '"${T}"' "fake test in comment" {' \
     '#   this should not count' \
     '# }' \
     '' \
-    '@test "real test 2" {' \
+    "${T}"' "real test 2" {' \
     '  echo "test 2"' \
     '}' \
     > "$fixture"
@@ -119,14 +121,14 @@ teardown() {
   local file2="$FIXTURE_DIR/file2.bats"
 
   printf '%s\n' \
-    '@test "test 1" { true; }' \
-    '@test "test 2" { true; }' \
+    "${T}"' "test 1" { true; }' \
+    "${T}"' "test 2" { true; }' \
     > "$file1"
 
   printf '%s\n' \
-    '@test "test 3" { true; }' \
-    '@test "test 4" { true; }' \
-    '@test "test 5" { true; }' \
+    "${T}"' "test 3" { true; }' \
+    "${T}"' "test 4" { true; }' \
+    "${T}"' "test 5" { true; }' \
     > "$file2"
 
   run bash "$COUNT_SCRIPT" "$file1" "$file2"
@@ -143,12 +145,12 @@ teardown() {
   printf '%s\n' \
     '#!/usr/bin/env bats' \
     '' \
-    '@test "real test" {' \
-    '  # This @test inside a function should not count' \
+    "${T}"' "real test" {' \
+    '  # This '"${T}"' inside a function should not count' \
     '  echo "test"' \
     '}' \
     '' \
-    '  @test "indented test" {' \
+    '  '"${T}"' "indented test" {' \
     '    # This is indented, so should not count' \
     '    true' \
     '  }' \

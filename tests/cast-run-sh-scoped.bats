@@ -17,6 +17,7 @@
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
+AT='@'  # fixture declarations are built at runtime; no literal at-test token in fixtures
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
 setup() {
@@ -51,9 +52,9 @@ _new_fake() {
 
 @test "scoped: --files runs ONLY the named file, not the full suite" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n@test "a2" { true; }\n' > "$fake/tests/alpha.bats"
-  printf '@test "b1" { true; }\n@test "b2" { true; }\n@test "b3" { true; }\n' > "$fake/tests/beta.bats"
-  printf '@test "g1" { true; }\n' > "$fake/tests/gamma.bats"
+  printf '%stest "a1" { true; }\n%stest "a2" { true; }\n' "$AT" "$AT" > "$fake/tests/alpha.bats"
+  printf '%stest "b1" { true; }\n%stest "b2" { true; }\n%stest "b3" { true; }\n' "$AT" "$AT" "$AT" > "$fake/tests/beta.bats"
+  printf '%stest "g1" { true; }\n' "$AT" > "$fake/tests/gamma.bats"
   # Full suite would be 6 tests; scoping to alpha must yield exactly 2.
 
   run bash "$fake/tests/run.sh" --files tests/alpha.bats --tap
@@ -69,9 +70,9 @@ _new_fake() {
 
 @test "scoped: PLANNED scopes to the requested subset" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n@test "a2" { true; }\n' > "$fake/tests/alpha.bats"
-  printf '@test "b1" { true; }\n@test "b2" { true; }\n@test "b3" { true; }\n' > "$fake/tests/beta.bats"
-  printf '@test "g1" { true; }\n' > "$fake/tests/gamma.bats"
+  printf '%stest "a1" { true; }\n%stest "a2" { true; }\n' "$AT" "$AT" > "$fake/tests/alpha.bats"
+  printf '%stest "b1" { true; }\n%stest "b2" { true; }\n%stest "b3" { true; }\n' "$AT" "$AT" "$AT" > "$fake/tests/beta.bats"
+  printf '%stest "g1" { true; }\n' "$AT" > "$fake/tests/gamma.bats"
   # alpha (2) + beta (3) = 5, deliberately excluding gamma. Full would be 6.
 
   run bash "$fake/tests/run.sh" --files tests/alpha.bats tests/beta.bats --tap
@@ -88,7 +89,7 @@ _new_fake() {
 
 @test "scoped: count-gate FAILS when fewer tests run than the requested files declare" {
   local fake; fake="$(_new_fake)"
-  printf '@test "ok1" { true; }\n' > "$fake/tests/good.bats"
+  printf '%stest "ok1" { true; }\n' "$AT" > "$fake/tests/good.bats"
   # phantom.bats: THREE lines match the planned-count grep (^@test) but only TWO are
   # real bats test blocks — `@testnoop()` is a no-op function definition (free code),
   # which cast-count-planned-tests counts yet bats excludes from its plan. So
@@ -98,7 +99,7 @@ _new_fake() {
   # bats load-error, whose plan-counting differs between macOS and Linux bats (macOS
   # drops the unloadable tests so executed<planned; Linux counts them as
   # setup_file-failed so executed==planned and the gate never fires).
-  printf '@test "p1" { true; }\n@testnoop() { :; }\n@test "p2" { true; }\n' > "$fake/tests/phantom.bats"
+  printf '%stest "p1" { true; }\n%stestnoop() { :; }\n%stest "p2" { true; }\n' "$AT" "$AT" "$AT" > "$fake/tests/phantom.bats"
 
   run bash "$fake/tests/run.sh" --files tests/good.bats tests/phantom.bats --tap
   assert_failure
@@ -111,7 +112,7 @@ _new_fake() {
 
 @test "scoped: a missing requested file is rejected (no silent full-suite fallback)" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+  printf '%stest "a1" { true; }\n' "$AT" > "$fake/tests/alpha.bats"
 
   run bash "$fake/tests/run.sh" --files tests/does-not-exist.bats --tap
   assert_failure
@@ -126,7 +127,7 @@ _new_fake() {
 
 @test "scoped: an absolute path is rejected" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+  printf '%stest "a1" { true; }\n' "$AT" > "$fake/tests/alpha.bats"
 
   run bash "$fake/tests/run.sh" --files /etc/hosts --tap
   assert_failure
@@ -144,7 +145,7 @@ _new_fake() {
 
 @test "scoped: a '..' traversal path is rejected" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+  printf '%stest "a1" { true; }\n' "$AT" > "$fake/tests/alpha.bats"
 
   run bash "$fake/tests/run.sh" --files tests/../tests/alpha.bats --tap
   assert_failure
@@ -153,7 +154,7 @@ _new_fake() {
 
 @test "scoped: --files with no file argument is rejected" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+  printf '%stest "a1" { true; }\n' "$AT" > "$fake/tests/alpha.bats"
 
   run bash "$fake/tests/run.sh" --files --tap
   assert_failure
@@ -166,9 +167,9 @@ _new_fake() {
 
 @test "full: no --files runs the whole (glob) suite" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n@test "a2" { true; }\n' > "$fake/tests/alpha.bats"
-  printf '@test "b1" { true; }\n@test "b2" { true; }\n@test "b3" { true; }\n' > "$fake/tests/beta.bats"
-  printf '@test "g1" { true; }\n' > "$fake/tests/gamma.bats"
+  printf '%stest "a1" { true; }\n%stest "a2" { true; }\n' "$AT" "$AT" > "$fake/tests/alpha.bats"
+  printf '%stest "b1" { true; }\n%stest "b2" { true; }\n%stest "b3" { true; }\n' "$AT" "$AT" "$AT" > "$fake/tests/beta.bats"
+  printf '%stest "g1" { true; }\n' "$AT" > "$fake/tests/gamma.bats"
   # No --files -> glob picks all three -> 6 tests.
 
   run bash "$fake/tests/run.sh" --tap
@@ -179,7 +180,7 @@ _new_fake() {
 
 @test "full: passthrough flag still flows to bats without --files" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+  printf '%stest "a1" { true; }\n' "$AT" > "$fake/tests/alpha.bats"
 
   run bash "$fake/tests/run.sh" --tap
   assert_success
@@ -196,7 +197,7 @@ _new_fake() {
 
 @test "preflight: a fake repo with no .gitmodules and no test_helper/ is not refused" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+  printf '%stest "a1" { true; }\n' "$AT" > "$fake/tests/alpha.bats"
   # _new_fake() never creates .gitmodules or tests/test_helper/ — this repo declares
   # no bats-helper submodules, so the preflight in tests/run.sh must not fire here.
 
@@ -216,9 +217,9 @@ _new_fake() {
 
 @test "bare positional: a bare file argument is rejected before any test runs" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
-  printf '@test "b1" { true; }\n@test "b2" { true; }\n' > "$fake/tests/beta.bats"
-  printf '@test "g1" { true; }\n@test "g2" { true; }\n@test "g3" { true; }\n' > "$fake/tests/gamma.bats"
+  printf '%stest "a1" { true; }\n' "$AT" > "$fake/tests/alpha.bats"
+  printf '%stest "b1" { true; }\n%stest "b2" { true; }\n' "$AT" "$AT" > "$fake/tests/beta.bats"
+  printf '%stest "g1" { true; }\n%stest "g2" { true; }\n%stest "g3" { true; }\n' "$AT" "$AT" "$AT" > "$fake/tests/gamma.bats"
   # Full glob would be 6 tests; a bare positional must run ZERO of them.
 
   run bash "$fake/tests/run.sh" tests/alpha.bats
@@ -231,7 +232,7 @@ _new_fake() {
 
 @test "bare positional: rejected before the temp-HOME banner is printed (bails before any work)" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+  printf '%stest "a1" { true; }\n' "$AT" > "$fake/tests/alpha.bats"
 
   run bash "$fake/tests/run.sh" tests/alpha.bats
   assert_failure
@@ -241,8 +242,8 @@ _new_fake() {
 
 @test "regression: flags still pass through and run the full glob without --files" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
-  printf '@test "b1" { true; }\n@test "b2" { true; }\n' > "$fake/tests/beta.bats"
+  printf '%stest "a1" { true; }\n' "$AT" > "$fake/tests/alpha.bats"
+  printf '%stest "b1" { true; }\n%stest "b2" { true; }\n' "$AT" "$AT" > "$fake/tests/beta.bats"
 
   run bash "$fake/tests/run.sh" --tap
   assert_success
@@ -251,8 +252,8 @@ _new_fake() {
 
 @test "regression: --files tests/alpha.bats --tap still scopes correctly" {
   local fake; fake="$(_new_fake)"
-  printf '@test "a1" { true; }\n@test "a2" { true; }\n' > "$fake/tests/alpha.bats"
-  printf '@test "b1" { true; }\n' > "$fake/tests/beta.bats"
+  printf '%stest "a1" { true; }\n%stest "a2" { true; }\n' "$AT" "$AT" > "$fake/tests/alpha.bats"
+  printf '%stest "b1" { true; }\n' "$AT" > "$fake/tests/beta.bats"
 
   run bash "$fake/tests/run.sh" --files tests/alpha.bats --tap
   assert_success
