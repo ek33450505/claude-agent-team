@@ -269,6 +269,36 @@ def _safe_int(v) -> Optional[int]:
         return None
 
 
+_FTS_STOPWORDS = frozenset("""
+a about above after again all also am an and any are aren as at be because been before being
+below between both but by can cannot could did do does doing down during each few for from
+further had has have having he her here hers him his how i if in into is isn it its itself just
+let like me more most my no nor not now of off on once only or other our out over own same she
+should so some such than that the their them then there these they this those through to too
+under until up very was we were what when where which while who whom why will with would you your
+yours yourself please thanks thank hey hello yes okay ok sure want need get got going
+""".split())
+_FTS_MAX_TOKENS = 12
+_FTS_MIN_TOKEN_LEN = 2
+
+
+def _select_fts_tokens(tokens: list) -> list:
+    """Bound the FTS OR-query: dedupe (case-insensitive), drop stopwords/filler and
+    tokens < 2 chars, keep at most 12 (longer first as a rarity proxy; ties keep
+    original order). Common words make bm25 score a huge result set (p95 ~1.3 s)."""
+    seen = set()
+    cand = []
+    for t in tokens:
+        low = t.lower()
+        if len(low) < _FTS_MIN_TOKEN_LEN or low in _FTS_STOPWORDS or low in seen:
+            continue
+        seen.add(low)
+        cand.append(t)
+    # Trade-off: longest-first truncation lets long filler outlive short terms; accepted for latency.
+    # sorted() is stable: equal lengths keep original order
+    return sorted(cand, key=lambda t: -len(t))[:_FTS_MAX_TOKENS]
+
+
 def retrieve_record_global(prompt: str, top_n: int = 3) -> list:
     """Global prompt-relevance retrieval over record_fts (memories+incidents+distillates).
 
@@ -284,7 +314,7 @@ def retrieve_record_global(prompt: str, top_n: int = 3) -> list:
     safe_prompt = sanitize_fts_query(prompt)
     if not safe_prompt:
         return []
-    tokens = safe_prompt.split()
+    tokens = _select_fts_tokens(safe_prompt.split())
     if not tokens:
         return []
     fts_match = ' OR '.join(f'"{t}"' for t in tokens)
