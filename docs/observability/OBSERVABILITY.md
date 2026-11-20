@@ -163,23 +163,15 @@ Claude Code's built-in OpenTelemetry support (`CLAUDE_CODE_ENABLE_TELEMETRY=1`) 
 
 ### How to Enable (Opt-In)
 
-Native OTel is **off by default**. To enable, set `OTEL_EXPORTER_OTLP_ENDPOINT` in your shell or environment:
+Native OTel is **off by default**. To enable it, run:
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+bash scripts/cast-otel.sh enable
 ```
 
-When the `SessionStart` hook fires, it detects the endpoint and writes to `CLAUDE_ENV_FILE`:
+This writes the feed keys (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, the OTLP exporters and the endpoint) into the user-scope fragment `~/.claude/managed-settings.d/12-otel.json`; see [otel-feed.md](../otel-feed.md). The `SessionStart` hook no longer wires OTel: since Claude Code 2.1.128, hooks do not inherit `OTEL_*` variables, so that path could never fire.
 
-```
-CLAUDE_CODE_ENABLE_TELEMETRY=1
-OTEL_METRICS_EXPORTER=otlp
-OTEL_LOGS_EXPORTER=otlp
-```
-
-**With no endpoint configured:** telemetry stays fully off. No `CLAUDE_CODE_ENABLE_TELEMETRY` is exported, no console metric dumps appear in interactive sessions.
-
-**For process-start telemetry** (before the `SessionStart` hook runs): operators can set `CLAUDE_CODE_ENABLE_TELEMETRY=1` directly in their shell profile or `settings.json` env block. The hook adds OTLP routing on top; it does not conflict.
+**With the feed disabled:** telemetry stays fully off. No `CLAUDE_CODE_ENABLE_TELEMETRY` is exported, no console metric dumps appear in interactive sessions.
 
 **Do NOT add `CLAUDE_CODE_ENABLE_TELEMETRY=1` to `settings.json`** for daily interactive use — without a collector running, this produces console metric noise on every session.
 

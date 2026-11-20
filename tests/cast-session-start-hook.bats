@@ -112,19 +112,23 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# 9. OTEL export wiring — OTLP endpoint set → writes CLAUDE_CODE_ENABLE_TELEMETRY + otlp exporters
+# 9. OTEL export wiring removed — the hook no longer writes OTel vars even when an
+# OTLP endpoint is set (CC >= 2.1.128 hooks don't inherit OTEL_*; 12-otel.json
+# managed settings own those vars).
 # ---------------------------------------------------------------------------
 
-@test "OTEL_EXPORTER_OTLP_ENDPOINT set → writes OTEL_METRICS_EXPORTER=otlp to env file" {
+@test "OTEL_EXPORTER_OTLP_ENDPOINT set → hook writes no OTEL_/telemetry lines to env file" {
   local env_file="$HOME/otel-env.sh"
   export CLAUDE_ENV_FILE="$env_file"
-  export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
-  bash "$HOOK_SH" <<< "$(make_payload "sess-otel" "/tmp")"
-  [ -f "$env_file" ]
-  grep -q "CLAUDE_CODE_ENABLE_TELEMETRY=1" "$env_file"
-  grep -q "OTEL_METRICS_EXPORTER=otlp" "$env_file"
-  grep -q "OTEL_LOGS_EXPORTER=otlp" "$env_file"
+  export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:1"
+  run bash "$HOOK_SH" <<< "$(make_payload "sess-otel" "/tmp")"
   unset OTEL_EXPORTER_OTLP_ENDPOINT
+  assert_success
+  [ -f "$env_file" ]
+  run grep -c "OTEL_" "$env_file"
+  [ "$output" = "0" ]
+  run grep -c "CLAUDE_CODE_ENABLE_TELEMETRY" "$env_file"
+  [ "$output" = "0" ]
 }
 
 # ---------------------------------------------------------------------------
