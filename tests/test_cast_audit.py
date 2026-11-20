@@ -1390,6 +1390,68 @@ class TestWriteRedactMap(unittest.TestCase):
         self.assertEqual(data["entities"], [])
         self.assertEqual(data["session_id"], "sess-1")
 
+    def test_traversal_session_id_stays_inside_dir_as_unknown(self):
+        """Mutation check: removing the session_id regex validation writes
+        outside REDACT_MAPS_DIR (or fails), so this assertion fails."""
+        base = tempfile.mkdtemp(prefix="cast-audit-redact-trav-")
+        self.addCleanup(shutil.rmtree, base, True)
+        maps = os.path.join(base, "maps")
+        os.makedirs(maps)
+        with mock.patch.object(cast_audit, "REDACT_MAPS_DIR", maps):
+            cast_audit.write_redact_map("../x", "2026-08-17T00:00:00Z", {"entities": []})
+            cast_audit.write_redact_map("/abs/evil", "2026-08-17T00:00:00Z", {"entities": []})
+        self.assertEqual(os.listdir(base), ["maps"], "nothing may be written outside maps/")
+        files = os.listdir(maps)
+        self.assertEqual(len(files), 1)  # both collapse to the same "unknown" name
+        self.assertTrue(files[0].startswith("unknown-"), files)
+
+    def test_symlink_at_target_not_followed(self):
+        victim = os.path.join(self._tmpdir, "victim.txt")
+        with open(victim, "w") as f:
+            f.write("keep")
+        link = os.path.join(self._tmpdir, "sess-1-2026-08-17T00-00-00Z.json")
+        os.symlink(victim, link)
+        with mock.patch.object(cast_audit, "_log_error"):
+            cast_audit.write_redact_map("sess-1", "2026-08-17T00:00:00Z", {"entities": []})
+        with open(victim) as f:
+            self.assertEqual(f.read(), "keep")
+
+    def test_symlinked_maps_dir_not_written_through(self):
+        real = tempfile.mkdtemp(prefix="cast-audit-redact-real-")
+        self.addCleanup(shutil.rmtree, real, True)
+        link = os.path.join(self._tmpdir, "linkdir")
+        os.symlink(real, link)
+        with mock.patch.object(cast_audit, "REDACT_MAPS_DIR", link):
+            with mock.patch.object(cast_audit, "_log_error") as mock_log:
+                cast_audit.write_redact_map("sess-1", "2026-08-17T00:00:00Z", {"entities": []})
+        self.assertEqual(os.listdir(real), [])
+        mock_log.assert_called_once()
+
+    def test_preexisting_wide_mode_target_tightened_to_0600(self):
+        target = os.path.join(self._tmpdir, "sess-1-2026-08-17T00-00-00Z.json")
+        with open(target, "w") as f:
+            f.write("old")
+        os.chmod(target, 0o644)
+        cast_audit.write_redact_map("sess-1", "2026-08-17T00:00:00Z", {"entities": []})
+        self.assertEqual(os.stat(target).st_mode & 0o777, 0o600)
+
+    def test_timestamp_with_slash_and_dotdot_stays_inside_dir(self):
+        base = tempfile.mkdtemp(prefix="cast-audit-redact-ts-")
+        self.addCleanup(shutil.rmtree, base, True)
+        maps = os.path.join(base, "maps")
+        os.makedirs(maps)
+        with mock.patch.object(cast_audit, "REDACT_MAPS_DIR", maps):
+            cast_audit.write_redact_map("sess-1", "../../evil/..", {"entities": []})
+        self.assertEqual(os.listdir(base), ["maps"])
+        self.assertEqual(len(os.listdir(maps)), 1)
+
+    def test_valid_session_id_written_with_0600(self):
+        cast_audit.write_redact_map("abc-123", "2026-08-17T00:00:00Z", {"entities": []})
+        files = os.listdir(self._tmpdir)
+        self.assertEqual(files, ["abc-123-2026-08-17T00-00-00Z.json"])
+        mode = os.stat(os.path.join(self._tmpdir, files[0])).st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
 
 class TestPiiAdvisoryLogSanitization(unittest.TestCase):
     """Test the PII-advisory-log fix (HIGH security defect, live-verified via
