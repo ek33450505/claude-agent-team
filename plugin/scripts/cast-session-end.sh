@@ -117,14 +117,18 @@ fi
 
 # Agent memory auto-initialization
 CAST_AGENT_MEM_INIT="${CAST_SCRIPTS_DIR}/cast-agent-memory-init.sh"
+_CAST_LOGDIR="${HOME}/.claude/logs"
+[ -e "$_CAST_LOGDIR" ] || [ -L "$_CAST_LOGDIR" ] || { mkdir -p "$(dirname "$_CAST_LOGDIR")" && mkdir -m 700 "$_CAST_LOGDIR"; } 2>/dev/null || true
+# Symlinked/unwritable logs dir: discard the two logs (no per-session temp dirs).
+{ [ ! -L "$_CAST_LOGDIR" ] && [ -d "$_CAST_LOGDIR" ] && [ -w "$_CAST_LOGDIR" ]; } || _CAST_LOGDIR=""
 if [[ -f "$CAST_AGENT_MEM_INIT" ]]; then
-  bash "$CAST_AGENT_MEM_INIT" > "${TMPDIR:-/tmp}/cast-agent-memory-init-last.log" 2>&1 &
+  bash "$CAST_AGENT_MEM_INIT" > "${_CAST_LOGDIR:-/dev/null}${_CAST_LOGDIR:+/cast-agent-memory-init-last.log}" 2>&1 &
 fi
 
 # Auto-escalation rule engine
 CAST_MEM_ESCALATION="${CAST_SCRIPTS_DIR}/cast-memory-escalation.sh"
 if [[ -f "$CAST_MEM_ESCALATION" ]]; then
-  bash "$CAST_MEM_ESCALATION" > "${TMPDIR:-/tmp}/cast-memory-escalation-last.log" 2>&1 &
+  bash "$CAST_MEM_ESCALATION" > "${_CAST_LOGDIR:-/dev/null}${_CAST_LOGDIR:+/cast-memory-escalation-last.log}" 2>&1 &
 fi
 
 # === ARCHIVE STALE FILES ===

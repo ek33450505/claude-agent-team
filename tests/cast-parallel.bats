@@ -179,3 +179,35 @@ print(len(rows))
 
   rm -rf "$tmp_db_dir"
 }
+
+@test "cast-parallel: no predictable log/dir names in shared TMPDIR or /tmp (audit unit I)" {
+  run grep -nE '\$\{TMPDIR:-/tmp\}/cast-[a-z-]*(log|-\$\{|-last)|"/tmp/cast-wipe' "${BATS_TEST_DIRNAME}/../scripts/cast-parallel.sh"
+  [ "$status" -eq 1 ]
+}
+
+# Extracts the log-dir resolution block from the script and evals it.
+_resolve_parallel_logs() {
+  local blk
+  blk="$(sed -n '/^_LOGDIR=/,/^PID_A=/p' "${BATS_TEST_DIRNAME}/../scripts/cast-parallel.sh" | sed '$d')"
+  PLAN_ID="p1" eval "$blk"
+}
+
+@test "cast-parallel: total log-dir failure sends both streams to /dev/null (not /dev/null/x)" {
+  local victim="$BATS_TEST_TMPDIR/victim" shim="$BATS_TEST_TMPDIR/shim"
+  mkdir -p "$victim" "$shim"
+  printf '#!/bin/bash\nexit 1\n' > "$shim/mktemp"; chmod +x "$shim/mktemp"
+  rm -rf "$HOME/.claude/logs"; ln -s "$victim" "$HOME/.claude/logs"
+  PATH="$shim:$PATH" _resolve_parallel_logs
+  [ "$LOG_A" = "/dev/null" ]
+  [ "$LOG_B" = "/dev/null" ]
+  [ "$(ls "$victim" | wc -l | tr -d ' ')" = "0" ]
+  # the redirect the launcher performs must succeed
+  ( : > "$LOG_A" ) 
+}
+
+@test "cast-parallel: existing logs dir mode is left alone" {
+  mkdir -p "$HOME/.claude/logs"; chmod 755 "$HOME/.claude/logs"
+  _resolve_parallel_logs
+  [ "$LOG_A" = "$HOME/.claude/logs/cast-parallel-p1-stream-a.log" ]
+  [ "$(stat -f %Lp "$HOME/.claude/logs" 2>/dev/null || stat -c %a "$HOME/.claude/logs")" = "755" ]
+}

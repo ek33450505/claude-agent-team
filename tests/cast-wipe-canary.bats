@@ -243,3 +243,8 @@ teardown() {
   run grep '\.claude.*cast-wipe-canary\.sh' "${plist}"
   assert_failure
 }
+
+@test "cast-wipe-canary: no predictable log/dir names in shared TMPDIR or /tmp (audit unit I)" {
+  run grep -nE '\$\{TMPDIR:-/tmp\}/cast-wipe-canary-\$\{TIMESTAMP\}"|"/tmp/cast-wipe' "${BATS_TEST_DIRNAME}/../scripts/cast-wipe-canary.sh"
+  [ "$status" -eq 1 ]
+}

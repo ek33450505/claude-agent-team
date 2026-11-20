@@ -52,9 +52,8 @@ INCIDENT_BASE="${CAST_INCIDENT_DIR:-${HOME}/Library/Application Support/cast/inc
 INCIDENT_DIR="${INCIDENT_BASE}/wipe-${TIMESTAMP}"
 
 if ! mkdir -p "${INCIDENT_DIR}" 2>/dev/null; then
-  # Last resort: fall back to /tmp — still outside ~/.claude
-  INCIDENT_DIR="/tmp/cast-wipe-canary-${TIMESTAMP}"
-  mkdir -p "${INCIDENT_DIR}" 2>/dev/null || exit 0  # truly nowhere to write; exit cleanly
+  # Last resort: unique 0700 mktemp -d dir under TMPDIR — still outside ~/.claude
+  INCIDENT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cast-wipe-canary-${TIMESTAMP}.XXXXXX" 2>/dev/null)" || exit 0  # truly nowhere to write; exit cleanly
 fi
 
 # ── Helper: run a command with a wall-clock time limit ───────────────────────

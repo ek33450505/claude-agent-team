@@ -460,3 +460,8 @@ teardown() {
   assert_success
   [ -e "$victim_dir/cast-session-start-sess-end-2.epoch" ]
 }
+
+@test "cast-session-end: no predictable log/dir names in shared TMPDIR or /tmp (audit unit I)" {
+  run grep -nE '\$\{TMPDIR:-/tmp\}/cast-[a-z-]*-last\.log' "${BATS_TEST_DIRNAME}/../scripts/cast-session-end.sh"
+  [ "$status" -eq 1 ]
+}

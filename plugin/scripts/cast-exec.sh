@@ -13,7 +13,7 @@
 #   cast-exec.sh --status <plan-file>
 #
 # Checkpoint: ~/.claude/cast/exec-state/{plan_id}.json
-# Agent logs:  ${TMPDIR:-/tmp}/cast-exec-{plan_id}-batch-{id}-{agent}.log
+# Agent logs:  ~/.claude/logs/cast-exec-{plan_id}-batch-{id}-{agent}.log
 #
 # Exit codes:
 #   0 — all batches completed and verified
@@ -292,14 +292,41 @@ _verify_files() {
 }
 
 # ── Agent dispatch ────────────────────────────────────────────────────────────
+# Private log dir (not shared /tmp): predictable names are only safe in a 0700 dir we own.
+# Resolved ONCE (globals, no subshell) so the logged path and the reported path agree.
+_CAST_LOG_DIR=""
+_cast_init_log_dir() {
+  local d="${HOME}/.claude/logs"
+  if [ ! -e "$d" ] && [ ! -L "$d" ]; then
+    { mkdir -p "$(dirname "$d")" && mkdir -m 700 "$d"; } 2>/dev/null || true
+  fi
+  if [ ! -L "$d" ] && [ -d "$d" ] && [ -w "$d" ]; then
+    _CAST_LOG_DIR="$d"
+  elif _CAST_LOG_DIR="$(mktemp -d 2>/dev/null)" && [ -n "$_CAST_LOG_DIR" ]; then
+    :
+  else
+    _CAST_LOG_DIR=""
+    echo "cast-exec: no private log dir available; agent logs discarded" >&2
+  fi
+}
+_cast_init_log_dir
+# Usage: _cast_log_path <plan_id> <batch_id> <agent>
+_cast_log_path() {
+  if [ -n "$_CAST_LOG_DIR" ]; then
+    printf '%s/cast-exec-%s-batch-%s-%s.log' "$_CAST_LOG_DIR" "$1" "$2" "$3"
+  else
+    printf '/dev/null'
+  fi
+}
+
 _dispatch_agent() {
   local plan_id="$1"
   local batch_id="$2"
   local agent_type="$3"
   local prompt="$4"
 
-  local _tmpdir="${TMPDIR:-/tmp}"
-  local log_file="${_tmpdir}/cast-exec-${plan_id}-batch-${batch_id}-${agent_type}.log"
+  local log_file
+  log_file="$(_cast_log_path "$plan_id" "$batch_id" "$agent_type")"
 
   _info "  Dispatching ${C_BOLD}${agent_type}${C_RESET}${C_CYAN} (log: ${log_file})"
 
@@ -328,8 +355,8 @@ _dispatch_agent_background() {
   local prompt="$4"
   local pidvar="$5"   # name of variable to store PID in
 
-  local _tmpdir="${TMPDIR:-/tmp}"
-  local log_file="${_tmpdir}/cast-exec-${plan_id}-batch-${batch_id}-${agent_type}.log"
+  local log_file
+  log_file="$(_cast_log_path "$plan_id" "$batch_id" "$agent_type")"
 
   _info "  Dispatching (parallel) ${C_BOLD}${agent_type}${C_RESET}${C_CYAN} (log: ${log_file})"
 
@@ -441,7 +468,7 @@ print(a.get('prompt', ''), end='')
       wait "$pid" || exit_code=$?
       if [ "$exit_code" -ne 0 ]; then
         _error "  Agent '${agent_name}' exited with code ${exit_code}"
-        _error "  Log: ${TMPDIR:-/tmp}/cast-exec-${PLAN_ID}-batch-${batch_id}-${agent_name}.log"
+        _error "  Log: $(_cast_log_path "$PLAN_ID" "$batch_id" "$agent_name")"
         all_ok=0
       else
         _success "  Agent '${agent_name}' completed."
@@ -486,7 +513,7 @@ print(a.get('prompt', ''), end='')
         _checkpoint_write_batch "$batch_id" "blocked" \
           "{\"reason\":\"agent ${agent_type} exited with code ${exit_code}\"}"
         _error "Batch ${batch_id} blocked: ${agent_type} exited with code ${exit_code}."
-        _error "  Log: ${TMPDIR:-/tmp}/cast-exec-${PLAN_ID}-batch-${batch_id}-${agent_type}.log"
+        _error "  Log: $(_cast_log_path "$PLAN_ID" "$batch_id" "$agent_type")"
         return 1
       fi
 

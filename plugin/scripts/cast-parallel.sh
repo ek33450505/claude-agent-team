@@ -237,8 +237,16 @@ _setup_worktrees() {
 }
 
 # ── Launch headless sessions ──────────────────────────────────────────────────
-LOG_A="${TMPDIR:-/tmp}/cast-parallel-${PLAN_ID}-stream-a.log"
-LOG_B="${TMPDIR:-/tmp}/cast-parallel-${PLAN_ID}-stream-b.log"
+_LOGDIR="${HOME}/.claude/logs"
+[ -e "$_LOGDIR" ] || [ -L "$_LOGDIR" ] || { mkdir -p "$(dirname "$_LOGDIR")" && mkdir -m 700 "$_LOGDIR"; } 2>/dev/null || true
+{ [ ! -L "$_LOGDIR" ] && [ -d "$_LOGDIR" ] && [ -w "$_LOGDIR" ]; } || _LOGDIR="$(mktemp -d 2>/dev/null)" || _LOGDIR=""
+if [ -n "$_LOGDIR" ]; then
+  LOG_A="${_LOGDIR}/cast-parallel-${PLAN_ID}-stream-a.log"
+  LOG_B="${_LOGDIR}/cast-parallel-${PLAN_ID}-stream-b.log"
+else
+  LOG_A=/dev/null
+  LOG_B=/dev/null
+fi
 PID_A=""
 PID_B=""
 
