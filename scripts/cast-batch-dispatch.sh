@@ -14,7 +14,7 @@
 #   1 — error; error message printed to stderr
 #
 # Example:
-#   cast-batch-dispatch.sh commit "/tmp/prompt.txt" --model claude-haiku-4-5
+#   cast-batch-dispatch.sh commit "/tmp/prompt.txt" --model claude-haiku-5-5
 #   # Output: msgbatch_1234567890abcdef
 #
 
@@ -22,7 +22,7 @@ if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 set -euo pipefail
 
 # Defaults
-MODEL="claude-haiku-4-5"
+MODEL="claude-haiku-5-5"
 
 # Parse args
 AGENT="${1:?agent name required}"

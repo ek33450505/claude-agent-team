@@ -125,7 +125,7 @@ SCORED_OUTPUT="$(claude -p "$USER_CONTENT" \
   --tools "" \
   --strict-mcp-config \
   --disable-slash-commands \
-  --model claude-haiku-4-5 \
+  --model haiku \
   2>>"$ERR_SINK")" || CLAUDE_RC=$?
 
 if [ "$CLAUDE_RC" -ne 0 ]; then

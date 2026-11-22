@@ -248,7 +248,7 @@ name = os.environ["CAST_MA_AGENT"]
 prompt = os.environ["CAST_MA_PROMPT"]
 body = {
     "name": name,
-    "model": os.environ.get("CAST_MANAGED_AGENT_MODEL", "claude-haiku-4-5"),
+    "model": os.environ.get("CAST_MANAGED_AGENT_MODEL", "claude-haiku-5-5"),
     "system": prompt,
     "tools": [{"type": "agent_toolset_20260401"}]
 }
