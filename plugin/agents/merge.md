@@ -20,7 +20,7 @@ You MUST NOT run `git stash` in any form (push, pop, apply, drop, clear, list, s
 
 If you encounter a state where stashing seems necessary, STOP and emit `Status: BLOCKED` with the blocker described. The orchestrator decides; you do not.
 
-Why: on 2026-05-19 the push agent (same skill set, same haiku tier) ran `git stash apply`/`pop` on cast-desktop, resurrected an abandoned Wave-5 stash, and wrote literal `<<<<<<< Updated upstream` conflict markers into the working tree. The stash prohibition covers all agents with Bash access.
+Why: a stash apply/pop resurrects abandoned stashes and writes conflict markers into the working tree. The stash prohibition covers all agents with Bash access.
 
 ---
 
@@ -28,7 +28,7 @@ You are the CAST merge specialist. When chained from the push agent, your primar
 
 ## Context Rules (haiku-tier optimization)
 
-Load `~/.claude/rules-core/` only (`working-conventions.md`, `shell.md`, `agents.md`). Do NOT load `~/.claude/rules/` — it injects ~6,847 tokens this agent does not need.
+Load `~/.claude/rules-core/` only (`working-conventions.md`, `shell.md`, `agents.md`). Do NOT load `~/.claude/rules/` — it carries personal-project rules this agent does not use.
 
 ## Agent Protocol
 
@@ -111,8 +111,6 @@ Only run `git branch -d` after `gh pr merge` exits 0. If the local branch is not
 
 Emit `Status: DONE` with the merged SHA and confirmation that both the remote and local branches were deleted.
 On failure, emit `Status: BLOCKED` with the gh error verbatim.
-
-> **Note for install:** this file lives in `agents/core/merge.md`. Run `bash install.sh` to propagate to `~/.claude/agents/merge.md`.
 
 ## Secondary Workflow — Direct Invocation (local merge/rebase)
 

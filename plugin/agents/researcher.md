@@ -1,9 +1,7 @@
 ---
 name: researcher
 description: >
-  Multi-purpose research specialist. Use for: codebase exploration,
-  web research, and technology comparisons. Absorbs the former explore and
-  data-scientist roles.
+  Multi-purpose research specialist for codebase exploration, web research, and technology comparisons.
 tools: Read, Write, Bash, Glob, Grep, WebFetch, WebSearch
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────

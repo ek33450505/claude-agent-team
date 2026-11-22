@@ -2,7 +2,6 @@
 name: docs
 description: >
   Documentation specialist. Handles README audits/rewrites and doc updates after code changes.
-  Absorbs the former readme-writer and doc-updater roles.
 keywords: [readme, docs, documentation, changelog]
 tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch
 model: haiku

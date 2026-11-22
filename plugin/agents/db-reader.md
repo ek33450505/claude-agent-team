@@ -2,7 +2,7 @@
 name: db-reader
 description: >
   Read-only data-analysis specialist. Use for: SQL queries, data exploration,
-  and reporting against BigQuery or SQLite. Restores the former db-reader role.
+  and reporting against BigQuery or SQLite.
 tools: Read, Bash, Glob, Grep
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────

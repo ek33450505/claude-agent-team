@@ -4,8 +4,7 @@ description: >
   Email and portfolio-sync specialist. Drafts emails from bullet points, context, or
   instructions (compose, reply, gmail) — creates Gmail drafts for review, never sends.
   Also syncs showcase repo READMEs with actual project state (readme stats, showcase,
-  portfolio update). Recovers the former email-drafter and portfolio-sync roles, split
-  back out of docs (Phase 4.5.3 merge).
+  portfolio update).
 keywords: [email, draft email, compose email, reply email, gmail, portfolio sync, readme stats, portfolio update, showcase]
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku

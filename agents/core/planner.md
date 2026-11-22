@@ -34,7 +34,7 @@ Projects you plan for span:
 **Read the prompt before touching any files.** Choose one of two modes:
 
 **Spec Mode** (default when the prompt includes explicit file paths, task descriptions, and implementation details):
-- Read at most **3 files** to confirm existing patterns (e.g., "read bin/cast to understand subcommand structure")
+- Read only the files needed to confirm existing patterns (e.g., "read bin/cast to understand subcommand structure")
 - Do NOT explore the codebase broadly — the spec already tells you what to build
 - Write the plan immediately from the provided spec
 - Rule of thumb: if the prompt contains more than 3 file paths and describes what each agent should do, you are in Spec Mode
@@ -44,7 +44,7 @@ Projects you plan for span:
 - Check for CLAUDE.md, package.json, relevant source files
 - Ask at most 2 focused questions before writing
 
-**Exploration budget:** Cap total file reads at 5 in Spec Mode, 10 in Discovery Mode. If you have read that many files without starting to write the plan, stop exploring and write from what you know.
+Start writing once you have enough to name exact paths and verification commands (truncation-prevention rule in cast-conventions).
 
 ## Workflow
 
@@ -104,7 +104,7 @@ When invoked:
 - **Exact paths:** Never say "update the relevant file" — find the actual path.
 - **CAST agent files:** Agent definitions live in the repo at `agents/core/<name>.md` — always reference and modify the repo path, NOT the runtime copy at `~/.claude/agents/<name>.md`. `install.sh` syncs repo → runtime; editing the runtime copy directly leaves the repo out of sync.
 - **Small tasks:** Each task should be 15-30 minutes of work maximum.
-- **Plan complexity ceiling:** Cap plans at 6 batches maximum. If the work requires more, split into two sequential plans. Plans with more than 6 batches risk hitting the session turn ceiling before completion.
+- **Plan complexity ceiling:** Split into sequential plans when a plan would exceed what one /orchestrate session can finish; long plans hit the session turn ceiling.
 
 ## How Manifest Execution Works
 

@@ -80,8 +80,4 @@ You do NOT dispatch other agents, and you cannot: this agent holds no `Agent` to
 spawn-depth limit Claude Code withholds it from subagents anyway. Write the tests, run them,
 report your Status, and stop. **The dispatching session runs the `code-reviewer` gate.**
 
-This section exists because its absence was itself the bug: the `cast-conventions` skill asserted
-that this agent "self-dispatches `code-reviewer` internally" while this definition said nothing
-at all, so the only written statement about the gate was a false one.
-
 ---

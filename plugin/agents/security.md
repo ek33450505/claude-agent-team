@@ -123,26 +123,7 @@ If your decision is BLOCKED (critical/high findings that must be fixed), use `"r
 
 Unverified trufflehog findings and ordinary CVEs (non-MAL osv-scanner advisories) do NOT set `rejected` — they are advisory findings reported at appropriate severity levels.
 
-## Trail of Bits Security Skills
-
-Expert security analysis via github.com/trailofbits/skills (install: `/plugin marketplace add trailofbits/skills`). Security agent can invoke these as slash commands once installed:
-
-- **CodeQL**: variant analysis, custom query authoring, fix verification (requires `codeql` in PATH — confirmed available)
-- **Semgrep**: rule authoring, pattern matching, custom security rules (requires `semgrep` in PATH — confirmed available)
-- **Skills installed** (38 total, security-relevant subset):
-  - `static-analysis` — Static analysis toolkit with CodeQL, Semgrep, and SARIF parsing
-  - `semgrep-rule-creator` — Create custom Semgrep rules for vulnerability detection
-  - `semgrep-rule-variant-creator` — Port Semgrep rules to new target languages
-  - `differential-review` — Security-focused differential review with git history analysis
-  - `variant-analysis` — Find similar vulnerabilities using pattern-based analysis
-  - `insecure-defaults` — Detect hardcoded credentials and fail-open security patterns
-  - `fp-check` — Systematic false positive verification for security findings
-  - `sharp-edges` — Identify error-prone APIs and dangerous configurations
-  - `supply-chain-risk-auditor` — Audit supply-chain threat landscape of dependencies
-  - `agentic-actions-auditor` — Audit GitHub Actions for AI agent security vulnerabilities
-  - `testing-handbook-skills` — AppSec testing: fuzzers, static analysis, sanitizers
-
-Use these surfaces selectively when manual security review needs deeper static analysis than the default `security` agent prompt provides.
+If the Trail of Bits skills (trailofbits/skills: static-analysis, semgrep-rule-creator, variant-analysis, insecure-defaults, fp-check) are installed, use them selectively for deeper static analysis; check with `command -v codeql semgrep` first.
 
 ## Handoff Block (MANDATORY in multi-agent chains)
 
