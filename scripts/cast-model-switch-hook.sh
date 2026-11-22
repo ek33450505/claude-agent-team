@@ -41,11 +41,18 @@ fi
 cast_hook_read_stdin
 cast_hook_db_path
 
-CAST_INPUT="$INPUT" DB_PATH_VAL="$DB_PATH" python3 -I - <<'PYEOF' || _log_error "model_switch row not recorded (insert failed)"
+DB_PATH_VAL="$DB_PATH" python3 -I - 3< <(printf '%s' "$INPUT") <<'PYEOF' || _log_error "model_switch row not recorded (insert failed)"
 import json, os, sqlite3, sys
 from datetime import datetime, timezone
 
-raw = os.environ.get("CAST_INPUT", ""); db_path = os.environ.get("DB_PATH_VAL", "")
+def _read_payload():
+    # Payload arrives on fd 3 (an env var would hit Linux's 128 KiB per-string limit: E2BIG).
+    try:
+        with os.fdopen(3, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return os.environ.get("CAST_INPUT", "")
+raw = _read_payload(); db_path = os.environ.get("DB_PATH_VAL", "")
 try: data = json.loads(raw)
 except Exception: sys.exit(0)
 if not isinstance(data, dict): sys.exit(0)

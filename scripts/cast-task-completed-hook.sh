@@ -39,11 +39,18 @@ fi
 cast_hook_read_stdin
 cast_hook_db_path
 
-CAST_INPUT="$INPUT" DB_PATH_VAL="$DB_PATH" python3 -I - <<'PYEOF' || true
+DB_PATH_VAL="$DB_PATH" python3 -I - 3< <(printf '%s' "$INPUT") <<'PYEOF' || true
 import json, os, sqlite3, uuid
 from datetime import datetime, timezone
 
-raw = os.environ.get("CAST_INPUT", ""); db_path = os.environ.get("DB_PATH_VAL", "")
+def _read_payload():
+    # Payload arrives on fd 3 (an env var would hit Linux's 128 KiB per-string limit: E2BIG).
+    try:
+        with os.fdopen(3, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return os.environ.get("CAST_INPUT", "")
+raw = _read_payload(); db_path = os.environ.get("DB_PATH_VAL", "")
 try: data = json.loads(raw)
 except Exception:
     import sys; sys.exit(0)

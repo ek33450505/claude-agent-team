@@ -179,3 +179,25 @@ assert project is not None and len(project) > 0, f'project is NULL or empty'
 print('ok')
 "
 }
+
+# ---------------------------------------------------------------------------
+# 11. Huge payload (~1.5 MiB) must not be lost to an env-var E2BIG (N-11)
+# ---------------------------------------------------------------------------
+
+@test "1.5 MiB error payload → DB row still written (payload not passed via env var)" {
+  local big="$BATS_TEST_TMPDIR/big-payload.json"
+  python3 -c "
+import json
+print(json.dumps({'hook_event_name': 'PostToolUseFailure', 'session_id': 'sess-huge',
+                  'tool_name': 'Bash', 'tool_input': 'x', 'error': 'E' * (1536 * 1024)}))
+" > "$big"
+  run bash "$HOOK_SH" < "$big"
+  assert_success
+  run python3 -c "
+import sqlite3, os
+con = sqlite3.connect(os.path.join(os.environ['HOME'], '.claude', 'cast.db'))
+rows = con.execute('SELECT length(error) FROM tool_call_failures WHERE session_id=?', ('sess-huge',)).fetchall()
+print(len(rows), rows[0][0] if rows else -1)
+"
+  assert_output "1 200"
+}
