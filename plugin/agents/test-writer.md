@@ -58,7 +58,7 @@ blockers: [describe if BLOCKED, else "none"]
 ```
 
 ## Response Budget
-Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
+Keep your prose and findings under **800 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
 ## Completion Report
 
@@ -79,9 +79,5 @@ Concerns: [required if DONE_WITH_CONCERNS]
 You do NOT dispatch other agents, and you cannot: this agent holds no `Agent` tool, and at the
 spawn-depth limit Claude Code withholds it from subagents anyway. Write the tests, run them,
 report your Status, and stop. **The dispatching session runs the `code-reviewer` gate.**
-
-This section exists because its absence was itself the bug: the `cast-conventions` skill asserted
-that this agent "self-dispatches `code-reviewer` internally" while this definition said nothing
-at all, so the only written statement about the gate was a false one.
 
 ---

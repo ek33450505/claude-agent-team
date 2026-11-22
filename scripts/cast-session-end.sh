@@ -68,11 +68,11 @@ fi
 # invocation (one interpreter cold-start, not two — stays within the
 # cold-start lint budget). Emits exactly two lines: session_id then cwd
 # (either may be empty); an unparseable payload yields two empty lines.
-_STDIN_FIELDS="$(CAST_INPUT="${_INPUT}" python3 -I -c "
-import json, os
+_STDIN_FIELDS="$(printf '%s' "${_INPUT}" | python3 -I -c "
+import json, sys
 sid = cwd = ''
 try:
-    d = json.loads(os.environ.get('CAST_INPUT', ''))
+    d = json.loads(sys.stdin.read())
     sid = d.get('session_id', '') or ''
     cwd = d.get('cwd', '') or ''
 except Exception:

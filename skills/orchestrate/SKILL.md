@@ -9,7 +9,7 @@ allowed-tools: [Read, Glob, Bash, Agent, Write, TaskCreate, TaskUpdate, TaskList
 
 This is the `/orchestrate` skill. It reads a plan's Agent Dispatch Manifest and executes the agent queue directly from the main session.
 
-> Native Dynamic Workflows (Phase 10) are preferred for new non-critical dispatches. This skill is the stable LEGACY fallback.
+> This skill executes plan manifests from /plan. For ad-hoc fan-out without a plan file, a native Workflow is lighter.
 
 ## Arguments
 
@@ -92,7 +92,7 @@ Before each batch:
 - Mark its task `in_progress`
 - Check turn budget: if fewer than 5 turns remain, write checkpoint and stop: "TURN LIMIT APPROACHING: paused at Batch N. Resume with `/orchestrate resume`."
 - For parallel batches: check `owns_files` — if two agents claim the same file, report FILE OWNERSHIP CONFLICT and stop.
-- For parallel batches: check co-scheduling — if the batch contains `test-runner` AND any of {`code-reviewer`, `security`, `frontend-qa`}, report CO-SCHEDULING CONFLICT and either stop or auto-serialize `test-runner` into its own sequential batch before dispatching the rest. (test-runner's suite-timeout/kill path can reap co-scheduled sibling review processes — observed 2026-06-14.)
+- For parallel batches: check co-scheduling — if the batch contains `test-runner` AND any of {`code-reviewer`, `security`, `frontend-qa`}, report CO-SCHEDULING CONFLICT and either stop or auto-serialize `test-runner` into its own sequential batch before dispatching the rest. (test-runner's suite-timeout/kill path can reap co-scheduled sibling review processes.)
 
 **Prompt construction for Agent tool calls:**
 Before passing the `prompt` field from the ADM to the Agent tool, prepend a context preamble. Use the **full preamble** for implementation agents and the **minimal preamble** for lightweight agents:
@@ -133,17 +133,17 @@ Apply the appropriate preamble tier to ALL agent dispatches — both parallel an
 1. If response length < 50 chars, retry once: "Your response was truncated. Please provide your complete Status block."
 2. **Contract validation** — valid Status values: `DONE`, `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`. If missing AND length > 50 chars, retry once: "Your response is missing a Status block. End with Status: DONE (or DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT)." On retry failure, attempt status file fallback (below).
 
-**Status file fallback (Phase 4.9):** Before declaring BLOCKED, run:
+**Status file fallback:** Before declaring BLOCKED, run:
 ```bash
 FILE_STATUS=$(python3 ~/.claude/scripts/orchestrate-dispatch.py recent-status --agent "$AGENT_NAME" --max-age 300 2>/dev/null)
 ```
 If non-empty, use as recovered Status and log `contract_passed=-1` to `quality_gates`. Only treat as BLOCKED if both retry AND file fallback fail.
 
-**Test-runner file truth (Phase 4.11):** For `test-runner`, file status wins over prose — run:
+**Test-runner file truth:** For `test-runner`, file status wins over prose — run:
 ```bash
 FILE_STATUS=$(python3 ~/.claude/scripts/orchestrate-dispatch.py recent-status --agent test-runner --max-age 300 2>/dev/null)
 ```
-If file differs from prose, trust file and log `[CAST] test-runner prose said X but file says Y — trusting file.` This rule applies BEFORE Phase 4.9.
+If file differs from prose, trust file and log `[CAST] test-runner prose said X but file says Y — trusting file.` This rule applies BEFORE the status-file fallback above.
 
 3. Log validation result to cast.db:
 ```bash
@@ -187,7 +187,7 @@ cast_emit_event 'task_completed' 'orchestrate-skill' 'session' '' 'All batches c
 Writer agents do not dispatch reviewers or commits; this session runs the review gate (Step 4, item 6), the test-runner batch after debugger, and every commit (Commit Pre-Stage Protocol).
 
 ## Output Compression Rules
-- Summarize each agent's response in **under 100 words**. Never reproduce content from the agent's spawn prompt.
+- Summarize each agent's response briefly; never reproduce the agent's spawn prompt.
 - Never paste full tool output, file contents, or raw WebFetch results into your context.
 - If your accumulated context exceeds ~30,000 tokens (roughly 15+ agent dispatches), perform inline compaction: discard completed batch details, keep only the status summary per batch.
 - When passing context to the next batch, include only: (1) the plan's remaining batches, (2) a 1-sentence summary per completed batch, (3) any blocking issues.
@@ -215,5 +215,4 @@ If `[CAST-TRUNCATED]` fires on a gate agent (test-runner, code-reviewer, securit
 
 - Never skip a batch unless the user explicitly says to
 - Maximum 4 agents per parallel batch
-- Output discipline: summarize each agent in 3 sentences max. Never paste full agent output verbatim.
 - If blocked after one retry: write checkpoint, stop, tell user how to resume with `/orchestrate resume`

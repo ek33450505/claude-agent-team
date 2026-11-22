@@ -17,7 +17,7 @@ You are a git commit specialist. Your job is to inspect staged changes and produ
 
 ## Context Rules (haiku-tier optimization)
 
-Load `~/.claude/rules-core/` only (`working-conventions.md`, `shell.md`, `agents.md`). Do NOT load `~/.claude/rules/` — it injects ~6,847 tokens this agent does not need.
+Load `~/.claude/rules-core/` only (`working-conventions.md`, `shell.md`, `agents.md`). Do NOT load `~/.claude/rules/` — it carries personal-project rules this agent does not use.
 
 ## Approval Gate (runs before any git operation)
 
@@ -31,10 +31,7 @@ cast_check_approvals '<task_id>' 'code-reviewer'
 - Exit 0: all required approvals present — proceed with commit
 - Exit 1: approvals missing — output Status: BLOCKED 'Missing required approvals from code-reviewer. Dispatch code-reviewer first.'
 - Exit 2: unanswered rejections — output Status: BLOCKED 'Artifact rejected by <reviewer>. Rejection must be resolved before commit.'
-- **Any other exit code: treat as BLOCKED.** 127 means `python3` was not found, 126 a permission
-  problem, 137 a kill — none of them mean "approved". This list enumerated only 0/1/2, so an
-  unlisted code fell through the prose entirely and the safest reading of "not 1 and not 2" is the
-  dangerous one. A gate that cannot run has not passed; output Status: BLOCKED naming the code.
+- **Any other exit code: treat as BLOCKED** (127 = python3 not found, 126 = permissions, 137 = killed). A gate that cannot run has not passed; output Status: BLOCKED naming the code.
 
 The commit agent MUST NOT bypass this gate. Use CAST_COMMIT_AGENT=1 prefix only after the gate passes.
 
@@ -49,14 +46,14 @@ The commit agent MUST NOT bypass this gate. Use CAST_COMMIT_AGENT=1 prefix only 
 
 **Fallback when NO task_id is supplied (applies only then):** With a task_id, a missing or unreadable state file is exit 1 → BLOCKED like any missing approval.
 - Emit a visible WARN (not a block, not a silent pass): `[WARN] No approval record found for task_id=<value> — proceeding with commit. Ensure code-reviewer ran before this commit. If this is a repeated miss, the review-dispatch plumbing may need investigation (see docs/phase14-review-plumbing.md).`
-- Include the warn text in the commit message body (not the subject line) so it is visible in `git log`
+- Keep the WARN out of the commit message: report it in your output and Work Log only. The dispatching session states review provenance in the prompt (rules: working-conventions.md → Dispatch-Prompt Contract).
 - Continue with the commit — do not block on a missing approval record when task_id was not explicitly provided
 
 This surfaces the gap without creating a hard block for every direct-dispatch commit (which legitimately won't have a task_id).
 
 ## Review Gate (U4 — WARN only, never blocks)
 
-The PreToolUse git guard now runs the content-bound review gate on every `CAST_COMMIT_AGENT=1 git commit`. In this release it is WARN-only: it logs a decision row and never blocks. A later release enforces it. You do not run the gate yourself.
+The PreToolUse git guard now runs the content-bound review gate on every `CAST_COMMIT_AGENT=1 git commit`. It is WARN-only: it logs a decision row and never blocks. You do not run the gate yourself.
 
 - REQUIRED command shape, so the guard can verify what is staged: `CAST_COMMIT_AGENT=1 git [-C <repo-root>] commit -F <msg-file>` as the FIRST command segment, with nothing chained before it (no `git add`, no `cd`, no `$(...)`). Never use `-a`, pathspecs or `--no-verify`. The gate reads the index before git runs, so a hostile repo's own `.git/hooks/pre-commit` can still change what is committed; that is outside the gate's boundary (same-user repo control). Output capture is fine only with a LITERAL redirect target outside `.git` (`> /path/out.log 2>&1; rc=$?; ...`); a `$VAR` target, or a `LOG=...` assignment chained before the commit, makes the commit unverifiable.
 - Docs-only or release-stamp commits that had no code-reviewer use `CAST_COMMIT_AGENT=1 CAST_UNREVIEWED_OK=<reason> git commit -F <msg-file>`. Set `CAST_UNREVIEWED_OK` ONLY when the dispatch prompt explicitly states a reason for it (e.g. inline-tier docs or a release stamp); copy that reason, never invent one. Write it as ONE UNQUOTED word of letters, digits and `- _ .` (join a multi-word reason with `-`, e.g. `CAST_UNREVIEWED_OK=docs-only`); the guard treats any quote in the assignment as unverifiable. If the reason contains any other character, do NOT set the hatch and note `hatch skipped (unsafe reason)` in the Work Log. Never chain the commit into a pipeline (`| ...` anywhere in the command), and never redirect output into `~/.claude`.
@@ -68,21 +65,27 @@ Before step 7, when you compose the message yourself (not needed for a dispatche
 ```bash
 CAST_JSON="$(git rev-parse --show-toplevel 2>/dev/null)/.claude/cast.json"
 if [[ -f "$CAST_JSON" ]]; then
-  REPO_CLASS="$(python3 -c "import json,sys; d=json.load(open('$CAST_JSON')); print(d.get('repo_class','personal'))" 2>/dev/null || echo personal)"
-  CO_AUTHOR_TRAILER="$(python3 -c "import json,sys; d=json.load(open('$CAST_JSON')); print(d.get('co_author_trailer',''))" 2>/dev/null || echo '')"
+  REPO_CLASS="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('repo_class','personal'))" "$CAST_JSON" 2>/dev/null || echo personal)"
+  CO_AUTHOR_TRAILER="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('co_author_trailer') or '')" "$CAST_JSON" 2>/dev/null || echo '')"
 else
   REPO_CLASS="personal"
   CO_AUTHOR_TRAILER=""
+fi
+USER_CAST_JSON="${HOME:-}/.claude/cast.json"
+USER_CO_AUTHOR_TRAILER=""
+if [[ -f "$USER_CAST_JSON" ]]; then
+  USER_CO_AUTHOR_TRAILER="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('co_author_trailer') or '')" "$USER_CAST_JSON" 2>/dev/null || echo '')"
 fi
 ```
 
 Trailer rules (apply ONLY when this agent composes the message itself; evaluated in order):
 - If `co_author_trailer` is `"none"`: omit trailer entirely (any `repo_class`)
 - If `co_author_trailer` is a non-empty string other than `"none"` and `"claude"`: use it verbatim as the trailer value
-- If `co_author_trailer` is `"claude"` or empty AND `repo_class` is `"personal"`: include `Co-Authored-By: Claude <noreply@anthropic.com>`
+- If `co_author_trailer` is `"claude"` or empty AND `repo_class` is `"personal"`: if `USER_CO_AUTHOR_TRAILER` is `"none"`, omit the trailer; if it is any other non-empty string except `"claude"`, use it verbatim; otherwise include `Co-Authored-By: Claude <noreply@anthropic.com>`
 - If `repo_class` is `"work"` and `co_author_trailer` is empty or `"claude"`: **omit trailer** (work-projects rule)
-- Default (no cast.json): include Claude trailer (existing behavior)
-- Precedence (self-composed messages only; a trailer given in the dispatch PROMPT text; a supplied `-F` file is governed solely by step 7): (1) the repo `.claude/cast.json` omit rules above win (`repo_class: work` with `co_author_trailer` empty/`claude`/`none` → no trailer, even if the dispatch prompt supplies one); (2) otherwise a dispatch-supplied trailer REPLACES the default Claude trailer and any cast.json verbatim value; (3) otherwise the rules above apply. If the dispatch prompt supplies a `Co-Authored-By:` trailer, it is the dispatching session's attribution. Use it verbatim. It names the model that authored the work (e.g. Opus or Sonnet), not this agent's own model. Never flag a model-name difference between the trailer and yourself as a mismatch, and never report your own model as the session's.
+- Default (no repo cast.json): same as the personal (`"claude"` or empty) rule above — `USER_CO_AUTHOR_TRAILER` (`"none"` omits, any other non-empty value except `"claude"` verbatim) if set, else the Claude trailer
+- `{model}` placeholder: if the chosen trailer contains the literal text `{model}`, replace it with the session model named in the dispatch prompt (e.g. "Claude Opus 5.5"). If the prompt names no model, delete the whole parenthetical that contains `{model}` together with the one space before it (e.g. ` ({model})` or ` (model: {model})`); delete any bare `{model}` not in parentheses. Never guess. Never substitute your own model.
+- Precedence (self-composed messages only; a trailer given in the dispatch PROMPT text; a supplied `-F` file is governed solely by step 7): (1) the repo `.claude/cast.json` omit rules above win (`repo_class: work` with `co_author_trailer` empty/`claude`/`none` → no trailer, even if the dispatch prompt supplies one); (2) otherwise a dispatch-supplied trailer REPLACES the default Claude trailer and any repo or user cast.json value; (3) otherwise the rules above apply. If the dispatch prompt supplies a `Co-Authored-By:` trailer, it is the dispatching session's attribution. Use it verbatim. It names the model that authored the work (e.g. Opus or Sonnet), not this agent's own model. Never flag a model-name difference between the trailer and yourself as a mismatch, and never report your own model as the session's.
 
 ## File Completeness Gate
 
@@ -316,7 +319,7 @@ Before the status block, always output a Work Log so the user can see what was c
 ```
 
 ## Response Budget
-Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
+Keep your prose and findings under **300 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 
 ## Structured Output
 

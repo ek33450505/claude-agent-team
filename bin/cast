@@ -454,7 +454,7 @@ USAGE
     if [ "$no_stream" -eq 0 ]; then
       printf " \\\\\n  -H 'Accept: text/event-stream'"
     fi
-    printf " \\\\\n  -d '{\"name\":\"%s\",\"model\":\"claude-haiku-4-5\",\"system\":\"...\",\"tools\":[{\"type\":\"agent_toolset_20260401\"}]}'" "$agent_name"
+    printf " \\\\\n  -d '{\"name\":\"%s\",\"model\":\"claude-haiku-5-5\",\"system\":\"...\",\"tools\":[{\"type\":\"agent_toolset_20260401\"}]}'" "$agent_name"
     printf "\n"
     printf "# agent: %s\n# prompt: %s\n# no-stream: %d\n" "$agent_name" "$prompt" "$no_stream"
     return 0

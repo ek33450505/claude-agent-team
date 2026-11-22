@@ -4,8 +4,7 @@ description: >
   Email and portfolio-sync specialist. Drafts emails from bullet points, context, or
   instructions (compose, reply, gmail) — creates Gmail drafts for review, never sends.
   Also syncs showcase repo READMEs with actual project state (readme stats, showcase,
-  portfolio update). Recovers the former email-drafter and portfolio-sync roles, split
-  back out of docs (Phase 4.5.3 merge).
+  portfolio update).
 keywords: [email, draft email, compose email, reply email, gmail, portfolio sync, readme stats, portfolio update, showcase]
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
@@ -102,7 +101,7 @@ You keep showcase repo READMEs accurate by syncing stats with actual project sta
 - If a stat can't be determined, leave unchanged and note in report
 
 ## Response Budget
-Keep your final response under **300 tokens**. Return your Status Block with draft ID (email mode) or repos updated count (portfolio-sync mode).
+Keep your prose and findings under **300 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Return your Status Block with draft ID (email mode) or repos updated count (portfolio-sync mode).
 
 ## Handoff
 

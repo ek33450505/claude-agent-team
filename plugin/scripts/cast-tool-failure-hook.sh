@@ -24,11 +24,18 @@ _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/
 
 INPUT="$(cat 2>/dev/null || true)"
 
-CAST_INPUT="$INPUT" python3 -I - <<'PYEOF' || true
+python3 -I - 3< <(printf '%s' "$INPUT") <<'PYEOF' || true
 import json, os
 from datetime import datetime, timezone
 
-raw = os.environ.get("CAST_INPUT", "")
+def _read_payload():
+    # Payload arrives on fd 3 (an env var would hit Linux's 128 KiB per-string limit: E2BIG).
+    try:
+        with os.fdopen(3, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+raw = _read_payload()
 try:
     data = json.loads(raw)
 except Exception:

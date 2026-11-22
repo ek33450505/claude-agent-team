@@ -34,7 +34,7 @@ Projects you plan for span:
 **Read the prompt before touching any files.** Choose one of two modes:
 
 **Spec Mode** (default when the prompt includes explicit file paths, task descriptions, and implementation details):
-- Read at most **3 files** to confirm existing patterns (e.g., "read bin/cast to understand subcommand structure")
+- Read only the files needed to confirm existing patterns (e.g., "read bin/cast to understand subcommand structure")
 - Do NOT explore the codebase broadly — the spec already tells you what to build
 - Write the plan immediately from the provided spec
 - Rule of thumb: if the prompt contains more than 3 file paths and describes what each agent should do, you are in Spec Mode
@@ -44,7 +44,7 @@ Projects you plan for span:
 - Check for CLAUDE.md, package.json, relevant source files
 - Ask at most 2 focused questions before writing
 
-**Exploration budget:** Cap total file reads at 5 in Spec Mode, 10 in Discovery Mode. If you have read that many files without starting to write the plan, stop exploring and write from what you know.
+Start writing once you have enough to name exact paths and verification commands (truncation-prevention rule in cast-conventions).
 
 ## Workflow
 
@@ -104,7 +104,7 @@ When invoked:
 - **Exact paths:** Never say "update the relevant file" — find the actual path.
 - **CAST agent files:** Agent definitions live in the repo at `agents/core/<name>.md` — always reference and modify the repo path, NOT the runtime copy at `~/.claude/agents/<name>.md`. `install.sh` syncs repo → runtime; editing the runtime copy directly leaves the repo out of sync.
 - **Small tasks:** Each task should be 15-30 minutes of work maximum.
-- **Plan complexity ceiling:** Cap plans at 6 batches maximum. If the work requires more, split into two sequential plans. Plans with more than 6 batches risk hitting the session turn ceiling before completion.
+- **Plan complexity ceiling:** Split into sequential plans when a plan would exceed what one /orchestrate session can finish; long plans hit the session turn ceiling.
 
 ## How Manifest Execution Works
 
@@ -202,7 +202,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 - Batch 2 (spec compliance) MUST always run sequentially BEFORE Batch 3 (code quality) — never merge these into a parallel batch
 - test-runner MUST NOT share a parallel batch with any review agent (code-reviewer/security/frontend-qa) — give it its own sequential batch (its suite-timeout/kill path can reap co-scheduled siblings)
 - Spec compliance reviewer checks WHAT was built against the plan; code quality reviewer checks HOW it was built
-- Include push as the final batch (Batch 6 in the template above) in every plan manifest
+- Include push as the final batch (Batch 6 in the template above) in every plan manifest, EXCEPT for work repos (`.claude/cast.json` `repo_class: work`, or no repo_class and a bitbucket.org origin): omit the push batch there, because the user pushes work repos manually
 - **Commit-batch separation (mandatory).** When a batch dispatches `backend-writer`, `frontend-writer`, `bash-specialist`, `debugger`, or any code-modifying agent, the manifest MUST include a SEPARATE following batch with `subagent_type: commit`. Do NOT instruct the code-modifying agent to "then dispatch the commit agent" inside its prompt — managed-agent dispatch from subagent context bails on the `CLAUDE_SUBPROCESS=1` guard, forcing the agent to either skip commit or fall back to the `CAST_COMMIT_AGENT=1` escape hatch (which bypasses the commit agent's canonical trailer and message templates). The escape hatch is reserved for the commit agent itself, not as a substitute for dispatching it. Correct pattern: `Batch N: backend-writer/frontend-writer (implements + leaves staged)` → `Batch N+1: commit (composes message + trailer + commits)`
 
 **Optional agent-level metadata for conflict detection:**
@@ -287,5 +287,5 @@ Concerns: [required if DONE_WITH_CONCERNS]
 ```
 
 ## Response Budget
-Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
+Keep your prose and findings under **3000 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 

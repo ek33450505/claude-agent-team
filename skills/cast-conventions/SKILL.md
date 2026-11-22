@@ -79,7 +79,7 @@ NEVER run any of: `git stash` (any form), `git reset` (any form), `git checkout 
 
 ## Guard friction — known self-blocks
 
-CAST's guards blocked CAST's own agents 676 times in 31 days (about 52 a day in the last 7), and about half of those (368 of 676) were heuristic false positives (measured 2026-10-10 from session transcripts). The guards are frozen and will not be narrowed for these cases, so use the shapes below. Never retry a variant spelling to get past a block.
+CAST's guards sometimes block legitimate agent commands with heuristic false positives. The guards are frozen and will not be narrowed for these cases, so use the shapes below. Never retry a variant spelling to get past a block.
 
 - **Commit hatch:** `CAST_COMMIT_AGENT=1` must lead its shell segment (the start of the command, or right after `;`, `&&`, `||` or `|`), not after `env`/`export` and not inside `$(…)`, `if` or `bash -c`. Pass the message with `-F <file>`. A multi-line `-m` is scanned line by line, so its body can trip the guard.
 - **Stash:** every `git stash` form is blocked, including read-only `git stash list`. To inspect, use `git reflog show refs/stash`.
@@ -94,8 +94,7 @@ CAST's guards blocked CAST's own agents 676 times in 31 days (about 52 a day in 
   `DONE_WITH_CONCERNS`, and stop. They do NOT self-dispatch `code-reviewer` — at the spawn-depth
   limit Claude Code withholds the `Agent` tool from a subagent entirely, so the call is absent,
   not merely discouraged. `code-reviewer` is also declared `background: true`, which an
-  in-process teammate cannot spawn. This line previously claimed the opposite; acting on it meant
-  the review gate ran nowhere.
+  in-process teammate cannot spawn.
 
 ## Code Review Requirement
 
@@ -160,13 +159,7 @@ name: <slug-no-spaces> | type: <feedback> | content: <text> | description: <opti
 
 ## Response Budget
 
-Each agent has its own token cap, declared in that agent's own `## Response Budget` section — **that per-agent cap is authoritative**. The tiers:
-
-- **~300 tokens** — reviewers / committers: `code-reviewer`, `commit`, `frontend-qa`, `release-notes`, `push`, `test-runner`
-- **~400 tokens** — `dep-auditor`
-- **~500 tokens** — `migration-reviewer`
-- **~800 tokens** — lightweight writers: `bash-specialist`, `docs`, `morning-briefing`, `test-writer`, `devops`, `merge`
-- **~3,000 tokens** — sonnet analysts: `api-contract`, `debugger`, `eval-writer`, `pr-reviewer`, `security`, `backend-writer`, `frontend-writer`, `planner`, `researcher`
+Each agent's own `## Response Budget` section declares its token cap; that cap is authoritative. It limits prose and findings: the required Status line, Handoff block, Work Log, `## Facts` block and `json status` block are exempt and must never be trimmed or dropped to fit.
 
 Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
@@ -184,8 +177,8 @@ The Response Budget exists to keep the prose tail intact through the model's out
 - **Turn budget (self-pace against it):** bash-specialist ≈ 30 turns · researcher ≈ 45 · code-reviewer ≈ 50 · docs ≈ 30 · test-writer/debugger ≈ 50 · backend-writer/frontend-writer ≈ 80 · most others 15–25. Once you have consumed roughly a third of your turns without a committed artifact (a file on disk or your Status block drafted), stop reading and write a partial draft now.
 
 **Deliver incrementally (never one massive response):**
-- Land your deliverable in pieces as you go — file edits, partial drafts, interim Status notes — instead of accumulating everything for a single giant final message. Output-token deaths kill the whole response; incremental delivery caps the blast radius of any one truncation. (I1, /insights 2026-07-02.)
-- **Prose-deliverable agents (research / audit / review reports — not a code file): persist to a scratchpad AS YOU GO.** If your primary deliverable is analysis or a report rather than a file you were asked to create, write your findings incrementally to a scratchpad file — skeleton section headers first, then fill each section as you discover it — so a mid-response API drop or truncation leaves a salvageable partial instead of a one-line fragment. Use the `Write` tool if your agent has it (e.g. `researcher`); if you only have `Bash` (most reviewers/analysts — `security`, `pr-reviewer`, `code-reviewer`, `migration-reviewer`, `api-contract`), append with `printf ... >> "$file"` — never a heredoc whose body names `~/.claude` itself or `~/.claude/{scripts,githooks,config}` (the command guard blocks that shape). If Claude Code refuses the report write, keep going and return the findings as text. Prefer a scratchpad path given in your dispatch, else `~/.claude/reports/<agent>-<task>.md`. This extends "artifact-first" from a code file to ANY deliverable. (Failure #3, 2026-07-27: a general-purpose audit agent died mid-response and returned only a one-line fragment — everything else was lost.)
+- Land your deliverable in pieces as you go — file edits, partial drafts, interim Status notes — instead of accumulating everything for a single giant final message. Output-token deaths kill the whole response; incremental delivery caps the blast radius of any one truncation.
+- **Prose-deliverable agents (research / audit / review reports — not a code file): persist to a scratchpad AS YOU GO.** If your primary deliverable is analysis or a report rather than a file you were asked to create, write your findings incrementally to a scratchpad file — skeleton section headers first, then fill each section as you discover it — so a mid-response API drop or truncation leaves a salvageable partial instead of a one-line fragment. Use the `Write` tool if your agent has it (e.g. `researcher`); if you only have `Bash` (most reviewers/analysts — `security`, `pr-reviewer`, `code-reviewer`, `migration-reviewer`, `api-contract`), append with `printf ... >> "$file"` — never a heredoc whose body names `~/.claude` itself or `~/.claude/{scripts,githooks,config}` (the command guard blocks that shape). If Claude Code refuses the report write, keep going and return the findings as text. Prefer a scratchpad path given in your dispatch, else `~/.claude/reports/<agent>-<task>.md`. This extends "artifact-first" from a code file to ANY deliverable.
 
 **Findings format for audit/research dispatches:**
 - Lead with a one-line headline per finding. One bullet per finding, no narration of the search path.
@@ -204,7 +197,7 @@ The Response Budget exists to keep the prose tail intact through the model's out
 - The agent's first response after receiving the prompt MUST either (a) emit the refusal, or (b) immediately begin scoped work on the first target. There is no "I'll try it and see if it fits" path.
 - See also: `agents/core/researcher.md` Pre-flight scope check — the researcher's hard rule mirrors this trigger and cites it as the authoritative source.
 
-Why this matters: a 2026-05-11 researcher dispatch with 10 audit checks ran 50+ tool calls and truncated to an empty reply. Twice. The rule existed; the trigger was not invoked. The structural fix is an explicit trigger condition, not a stronger suggestion.
+Why this matters: a researcher dispatch with 10 audit checks truncated to an empty reply. The structural fix is an explicit trigger condition, not a stronger suggestion.
 
 **Reference, don't reproduce:**
 - File contents → write a diff, not the new file body.
@@ -221,7 +214,7 @@ Tests and scripts MUST NOT issue destructive operations (`rm -rf`, `git checkout
 - If a test needs to verify "the routines/ directory exists," it `stat`s the path read-only. It does NOT `rm` and recreate.
 - Outside tests: agents do not run `git checkout`, `git restore`, `git reset`, `git clean`, or `rm -rf` against tracked paths to "clean up" state they didn't create. If the working tree is dirty in a way that blocks the task, report `Status: BLOCKED` with the blocker and let the orchestrator decide.
 
-Why: a CAST routines deletion on 2026-05-11 traced to a BATS test that ran `rm -rf "routines"` from the repo root, deleting every tracked YAML in `routines/`. The destructive op had no isolation guard and no cwd assertion. Recovery was via `git checkout HEAD -- routines/`, but the pattern is the danger — the framework cannot catch every destructive sequence at lint time.
+Why: a BATS test that ran `rm -rf "routines"` from the repo root once deleted every tracked YAML in `routines/`; the framework cannot catch every destructive sequence at lint time.
 
 ## Pre-existing Failure Evidence Rule
 
@@ -249,4 +242,4 @@ If you cannot use a worktree, escalate to `Status: BLOCKED` and let the orchestr
 - Sync/migration agents (anyone moving code between repos): if you encounter post-sync test failures, you MUST run baseline on the pre-sync commit before reporting pre-existing. If you can't or won't run baseline, the Status is `BLOCKED`.
 - debugger: may dismiss a failure as pre-existing only after producing baseline evidence in the Work Log.
 
-Why: a cast-hooks 17-script bulk-sync on 2026-05-11 reported 5 contract-test failures as "pre-existing failures unrelated to the sync." They were not — every failure was caused by the sync. The agent's confident classification cost ~40 minutes of triage before the revert. The structural fix is to refuse the classification absent evidence.
+Why: a bulk-sync agent once labeled 5 failures "pre-existing" when the sync caused every one. The structural fix is to refuse the classification absent evidence.

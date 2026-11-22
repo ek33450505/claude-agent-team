@@ -25,11 +25,18 @@ INPUT="$(cat 2>/dev/null || true)"
 
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 
-CAST_INPUT="$INPUT" DB_PATH_VAL="$DB_PATH" python3 -I - <<'PYEOF' || true
+DB_PATH_VAL="$DB_PATH" python3 -I - 3< <(printf '%s' "$INPUT") <<'PYEOF' || true
 import json, os, sqlite3, uuid
 from datetime import datetime, timezone
 
-raw = os.environ.get("CAST_INPUT", "")
+def _read_payload():
+    # Payload arrives on fd 3 (an env var would hit Linux's 128 KiB per-string limit: E2BIG).
+    try:
+        with os.fdopen(3, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+raw = _read_payload()
 db_path = os.environ.get("DB_PATH_VAL", "")
 
 try:

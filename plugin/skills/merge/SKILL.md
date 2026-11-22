@@ -54,4 +54,4 @@ Run `git status` and `git branch -vv` to detect the situation:
 
 Use the Agent tool to dispatch `merge` with the full context assembled above.
 
-Do not execute git commands inline — hand off to the agent.
+Beyond the read-only detection commands above, do not execute git commands inline — hand off to the agent.

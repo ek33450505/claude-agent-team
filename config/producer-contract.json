@@ -6,7 +6,7 @@
   "tables": [
     {
       "table": "sessions",
-      "writers": ["cast-session-start-hook.sh:86"],
+      "writers": ["cast-session-start-hook.sh:93"],
       "cadence": "per_session",
       "status": "live"
     },
@@ -56,7 +56,7 @@
     },
     {
       "table": "routing_events",
-      "writers": ["cast-user-prompt-hook.sh:169", "cast-model-switch-hook.sh:82", "cast_subagent_stop.py:3034", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
+      "writers": ["cast-user-prompt-hook.sh:176", "cast-model-switch-hook.sh:89", "cast_subagent_stop.py:3034", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -81,7 +81,7 @@
     },
     {
       "table": "tool_call_failures",
-      "writers": ["cast-tool-failure-hook.sh:65"],
+      "writers": ["cast-tool-failure-hook.sh:72"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -105,7 +105,7 @@
     },
     {
       "table": "swarm_sessions",
-      "writers": ["cast-teammate-idle-hook.sh:81", "cast-task-completed-hook.sh:81"],
+      "writers": ["cast-teammate-idle-hook.sh:88", "cast-task-completed-hook.sh:88"],
       "cadence": "per_event",
       "status": "live",
       "notes": "closer: cast-session-end.sh; reaper: cast-abandon-stale-runs.py; closer added 2026-07-03"
@@ -119,7 +119,7 @@
     },
     {
       "table": "task_queue",
-      "writers": ["cast-queue-add.sh:168", "cast-task-created-hook.sh:88"],
+      "writers": ["cast-queue-add.sh:168", "cast-task-created-hook.sh:95"],
       "cadence": "per_event",
       "status": "live",
       "notes": "write-only by design; consumer removed v9 I9"
@@ -170,7 +170,7 @@
     },
     {
       "table": "pane_bindings",
-      "writers": ["cast-session-start-hook.sh:122"],
+      "writers": ["cast-session-start-hook.sh:129"],
       "cadence": "per_session",
       "status": "live",
       "notes": "started_at is INTEGER epoch, not ISO"

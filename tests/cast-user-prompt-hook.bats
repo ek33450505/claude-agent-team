@@ -1252,3 +1252,18 @@ STUBEOF
   [ -e "$tmpdir/router-called" ]
   rm -rf "$tmpdir"
 }
+
+@test "oversized (1.5 MiB) prompt payload still records a routing_events row (fd 3, not env)" {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  python3 -c "
+import json
+print(json.dumps({'hook_event_name': 'UserPromptSubmit', 'session_id': 'sess-huge', 'prompt': 'x' * (1536 * 1024)}))
+" > "$tmpdir/input.json"
+
+  run bash -c 'bash "$1" < "$2"' _ "$HOOK_SH" "$tmpdir/input.json"
+  assert_success
+  run sqlite3 "$HOME/.claude/cast.db" "SELECT count(*) FROM routing_events WHERE session_id='sess-huge'"
+  assert_output "1"
+  rm -rf "$tmpdir"
+}

@@ -2,7 +2,7 @@
 name: debugger
 description: >
   Root-cause debugging of concrete failures — a reproduced error, a stack trace, a failing test, or observably wrong runtime behavior. Use when investigation needs more than one inline tool call. NOT for code-quality concerns (use code-reviewer), writing tests for passing code (use test-writer), or review-only findings; debugger edits code and returns for the dispatching session to review and commit, so route only confirmed defects.
-tools: Read, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 50
@@ -93,16 +93,8 @@ After the human-readable block above, also emit a machine-readable JSON payload:
 Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
 ---
 
-## Advisor Tool (future integration)
-
-> Anthropic's Advisor Tool (API beta, `advisor-tool-2026-03-01`) pairs a Sonnet executor
-> with an Opus advisor in a single API call. This is currently API-only and not available
-> through Claude Code's Agent tool. When CAST moves to custom API pipelines, debugger
-> should be configured with Opus advisory for complex root cause analysis, giving
-> near-Opus diagnostic quality at Sonnet cost.
-
 ## Response Budget
-Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
+Keep your prose and findings under **3000 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## ACI Reference
 

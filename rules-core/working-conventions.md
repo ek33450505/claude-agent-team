@@ -30,11 +30,11 @@ Fail ANY condition → the standard ceremony applies (dispatch the specialist + 
 - TDD: write failing tests before implementation for logic-heavy tasks
 - Scope discipline: every change traces to the request. Fix a trivial bug only in a file you are ALREADY editing for the task — never open another file to "tidy" it; no "while I'm here" edits.
 - Out-of-scope or non-trivial findings: SURFACE, do not fix without an OK. Agents flag via `DONE_WITH_CONCERNS` (the Status `Concerns` field); the main session raises it to the user. (Surgical HARD RULES in `bash-specialist`/`commit` stay stricter — this does not loosen them.)
-- MANDATORY: `code-reviewer` after every logical unit of changes **above the Inline tier** (trivial doc/comment/non-protected-config edits the main session applies inline are exempt — see **Inline tier**; anything touching code, enforcement/security/destructive config, or a §1 hard-won-core file is never exempt)
-- MANDATORY: Never `git commit` directly (see `## Commits` for the agent + escape hatch)
-- MANDATORY: Route errors to `debugger` agent, not inline triage
-- MANDATORY: The **dispatching session runs the review gate** — code-modifying agents do NOT attempt to self-dispatch `code-reviewer` (see `## Review Gate`)
-- MANDATORY: All agents end with Status: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
+- Run `code-reviewer` after every logical unit of changes **above the Inline tier** (trivial doc/comment/non-protected-config edits the main session applies inline are exempt — see **Inline tier**; anything touching code, enforcement/security/destructive config, or a §1 hard-won-core file is never exempt)
+- Never `git commit` directly (see `## Commits` for the agent + escape hatch)
+- Route errors to the `debugger` agent rather than triaging inline.
+- The **dispatching session runs the review gate** — code-modifying agents do NOT attempt to self-dispatch `code-reviewer` (see `## Review Gate`)
+- All agents end with Status: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
 
 ## Review Gate (who runs it, and what a verdict is worth)
 
@@ -99,9 +99,7 @@ Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention
 
 ## Testing
 
-> **POLICY CHANGE (Ed, 2026-06-02):** Passing tests are NO LONGER a per-merge/per-push requirement.
-> Tests are fixed in batches before version releases. Rationale: gate failures unrelated to changes
-> cost half a day on PR #104. The old "all tests green before push" rule is retired.
+> Passing tests are not a per-merge/per-push requirement; they are fixed in batches before version releases (unrelated gate failures otherwise stall merges).
 > EXCEPTIONS that still block immediately: (1) destructive tests (anything that can damage the live
 > runtime — see project_cast_recovery_state memory), (2) failures clearly caused by the change being made.
 > **NEVER run the full BATS suite against a real $HOME — the isolated-temp-HOME requirement is permanent**
@@ -125,7 +123,7 @@ Full checklist moved to the **`typescript-conventions`** skill (loaded on demand
 - Optimized queries with filters; BigQuery via `bq query` CLI
 
 ## Commits
-- MANDATORY: Use `commit` agent — never raw `git commit` (escape hatch when agent unavailable: `CAST_COMMIT_AGENT=1 git commit`)
+- Use the `commit` agent — never raw `git commit` (escape hatch when agent unavailable: `CAST_COMMIT_AGENT=1 git commit`)
 - Imperative mood, concise (`Add feature X`, `Fix bug in Y`)
 
 ## Context Management

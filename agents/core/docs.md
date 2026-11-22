@@ -2,7 +2,6 @@
 name: docs
 description: >
   Documentation specialist. Handles README audits/rewrites and doc updates after code changes.
-  Absorbs the former readme-writer and doc-updater roles.
 keywords: [readme, docs, documentation, changelog]
 tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch
 model: haiku
@@ -98,5 +97,5 @@ blockers: [describe if BLOCKED, else "none"]
 ```
 
 ## Response Budget
-Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
+Keep your prose and findings under **800 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 

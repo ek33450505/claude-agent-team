@@ -78,7 +78,7 @@ blockers: [describe if BLOCKED, else "none"]
 ```
 
 ## Response Budget
-Keep your final response under **300 tokens**. Return your Status Block with commit count and category breakdown.
+Keep your prose and findings under **300 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Return your Status Block with commit count and category breakdown.
 
 ## Rules
 - Never modify source code — only changelog/release note files
