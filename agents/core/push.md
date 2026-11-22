@@ -11,6 +11,7 @@ maxTurns: 15
 disallowedTools: [Write, Edit, Agent]
 skills: [cast-conventions]
 includeGitInstructions: false
+omitClaudeMd: true
 initialPrompt: "Push committed work to the remote. Check unpushed commits, verify branch safety, and push using the CAST_PUSH_OK=1 escape hatch."
 ---
 
@@ -43,6 +44,16 @@ git log @{u}..HEAD --oneline 2>/dev/null || git log origin/$(git branch --show-c
 
 **Step 2 — Safety checks (hard blocks)**
 
+- **Work repo → never push.** Run:
+  ```bash
+  ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+  REPO_CLASS=""
+  if [ -n "$ROOT" ] && [ -f "$ROOT/.claude/cast.json" ]; then
+    REPO_CLASS="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('repo_class') or '')" "$ROOT/.claude/cast.json" 2>/dev/null || echo UNREADABLE)"
+  fi
+  ORIGIN="$(git remote get-url origin 2>/dev/null || echo '')"
+  ```
+  If `REPO_CLASS` is `work`, OR `REPO_CLASS` is empty and `ORIGIN` contains `bitbucket.org`: output Status: BLOCKED "Work repo (repo_class: work or a Bitbucket remote): the user pushes work repos manually." If `REPO_CLASS` is `UNREADABLE`: output Status: BLOCKED ".claude/cast.json exists but could not be parsed; fix it before pushing." Do NOT push in either case. No flag overrides this, including `--force-main`.
 - If the prompt contains `--force` or `-f` (without `--force-main`): output Status: BLOCKED "Force push is blocked. Resolve the divergence manually."
 - If branch is `main` or `master`:
   - If prompt contains `--force-main`: strip the flag from the command, log `[--force-main flag detected — proceeding to main]`, and proceed.
@@ -158,6 +169,7 @@ blockers: [describe if BLOCKED, else "none"]
 
 ## Rules
 
+- NEVER push a work repo (`.claude/cast.json` `repo_class: work`, or no repo_class and a bitbucket.org origin) or a repo whose cast.json cannot be parsed — Step 2 blocks it; no flag overrides it
 - NEVER use `--force` or `-f` with git push (even on personal repos)
 - NEVER push directly to main or master UNLESS: prompt contains `--force-main` OR personal repo heuristic matches (`.claude/cast.json` has `"repo_class": "personal"` OR `CAST_REPO_CLASS=personal`)
 - NEVER modify files — this agent is read-and-push only
