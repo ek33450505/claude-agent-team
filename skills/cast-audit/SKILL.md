@@ -1,6 +1,6 @@
 ---
 name: cast-audit
-description: Comprehensive CAST codebase audit — bugs, security, performance, test coverage. Dispatches 4 parallel researchers to scan the codebase and collates findings into a dated report. Manual invocation only; monthly scheduling is a design intention (helper not yet shipped).
+description: Comprehensive CAST codebase audit — bugs, security, performance, test coverage. Dispatches parallel researchers to scan the codebase and collates findings into a dated report. Manual invocation only.
 user-invocable: true
 allowed-tools: [Agent, Read, Glob, Grep]
 ---
@@ -9,7 +9,7 @@ allowed-tools: [Agent, Read, Glob, Grep]
 
 ## Overview
 
-The `/cast-audit` skill automates the 4-way codebase audit that was run manually on 2026-04-16, surfacing accumulating drift and regressions before they compound. It dispatches 4 parallel researchers (bugs/dead code, security, performance, test coverage), collates findings, and writes a report to `~/.claude/reports/cast-audit-YYYY-MM-DD.md`.
+The `/cast-audit` skill automates the CAST codebase audit, surfacing accumulating drift and regressions before they compound. It dispatches parallel researchers, one per section (bugs/dead code, security, performance, test coverage), collates findings, and writes a report to `~/.claude/reports/cast-audit-YYYY-MM-DD.md`.
 
 **Does NOT auto-fix.** This skill surfaces findings only. Remediation happens via follow-up agent dispatch (`debugger`, `security`, `test-writer`).
 
@@ -27,17 +27,7 @@ Runs full audit and writes report to `~/.claude/reports/cast-audit-YYYY-MM-DD.md
 
 - `/cast-audit --since 2026-03-01` — Only flag regressions (increases, new findings) since the date. Compares against the most recent prior audit before that date.
 - `/cast-audit --section security` — Run one section only (security, bugs, performance, or coverage). Output still goes to the full report.
-- `/cast-audit --no-collate` — Run 4 parallel researchers but do NOT collate into a single report. Useful for debugging individual sections.
-
-### Scheduled execution
-
-**Design intention: first Monday of each month, 08:00 local time.** Scheduling via RemoteTrigger or cron requires a helper script that is not yet shipped (see "Scheduling" below). Manual invocation only until then.
-
-The scheduled run:
-1. Dispatches the 4 researchers in parallel
-2. Writes section reports to `~/.claude/reports/cast-audit-YYYY-MM-DD-<section>.md`
-3. Collates into `~/.claude/reports/cast-audit-YYYY-MM-DD.md`
-4. (Optional) Sends notification to user inbox
+- `/cast-audit --no-collate` — Run the parallel researchers but do NOT collate into a single report. Useful for debugging individual sections.
 
 ## Report Format
 
@@ -133,7 +123,7 @@ Scan for:
 
 When invoked, the main session:
 
-1. **Dispatches 4 researchers in parallel**, each with a targeted scope:
+1. **Dispatches researchers in parallel**, one per section, each limited to at most 4 of that section's checks (split a section into two dispatches when it has more), per the cast-conventions refusal trigger:
    ```
    Researcher 1 (bugs): Scan scripts/, agents/, skills/ for orphan, unreachable, and cold-start patterns
    Researcher 2 (security): Scan all code for SQL injection, shell injection, secrets, file perms
@@ -149,7 +139,7 @@ When invoked, the main session:
    ~/.claude/reports/cast-audit-YYYY-MM-DD-coverage.md
    ```
 
-3. **Main session collates the 4 reports into**:
+3. **Main session collates the section reports into**:
    ```
    ~/.claude/reports/cast-audit-YYYY-MM-DD.md
    ```
@@ -157,44 +147,9 @@ When invoked, the main session:
 
 4. **Idempotency**: Running `/cast-audit` twice on 2026-04-16 overwrites `cast-audit-2026-04-16.md` and the section files.
 
-## Scheduling
-
-### Via RemoteTrigger
-
-Create a scheduled task that invokes Claude Code with:
-```
-claude-code \
-  --message "Dispatch /cast-audit skill to run monthly audit." \
-  --cwd ${HOME}/Projects/personal/claude-agent-team
-```
-
-Schedule: **First Monday of each month at 08:00 local time**
-
-### Via cron (fallback — illustrative, helper not yet shipped)
-
-Example crontab entry (not yet functional — requires `scripts/cast-audit-cron.sh` which has not been shipped):
-```
-# First Monday of month at 08:00 local — CAST audit (illustrative only)
-# 0 8 * * 1 [ $(date +\%d) -le 7 ] && cd ${HOME}/Projects/personal/claude-agent-team && bash scripts/cast-audit-cron.sh
-```
-
-Create `scripts/cast-audit-cron.sh` first if cron scheduling is actually adopted.
-
-
 ## Integration with CAST Ecosystem
 
 - **Findings are diagnostic only** — remediation requires explicit follow-up dispatch of debugger, security, test-writer.
 - **Report location** — Always `~/.claude/reports/cast-audit-YYYY-MM-DD.md`. Updated README documents this path.
 - **Comparison logic** — If prior audit exists in `~/.claude/reports/cast-audit-YYYY-MM-*.md`, collation step compares finding counts by severity and flags regressions (e.g., "+3 HIGH since last month").
 - **No auto-fix** — This is a discovery tool. Prevents "invisible" drift from accumulating.
-
-## Acceptance Criteria
-
-- [x] `/cast-audit` skill exists with clear invocation instructions
-- [x] Dispatches 4 parallel researchers (bugs, security, performance, coverage)
-- [x] Each researcher writes section report to `~/.claude/reports/cast-audit-YYYY-MM-DD-<section>.md`
-- [x] Main session collates into `~/.claude/reports/cast-audit-YYYY-MM-DD.md` with executive summary
-- [x] Report location documented (this file)
-- [x] Scheduled-task configuration documented but NOT registered (user approval required)
-- [x] Idempotent — running twice on same date overwrites prior result
-- [x] README updated with one-line mention of the skill
