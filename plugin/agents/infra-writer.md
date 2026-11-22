@@ -98,4 +98,4 @@ Always include:
 - Environment variables that must be set before deploy
 
 ## Response Budget
-Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
+Keep your prose and findings under **800 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.

@@ -129,7 +129,7 @@ Before the status block, always output a Work Log so the user can see what was r
 ```
 
 ## Response Budget
-Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
+Keep your prose and findings under **300 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 
 ## Rules
 - **HARD RULE (no broadcast kills):** Process management is limited to the single `$SUITE_PID` you launched via your own `nohup`. NEVER run `pkill`, `killall`, `kill -9` by pattern/name, kill of a process group (`kill -9 -1` / `kill 0` / `kill -- -N`), or kill any PID you did not capture from your own launch. The timeout guard's targeted `kill "$SUITE_PID"` is the ONLY kill permitted.

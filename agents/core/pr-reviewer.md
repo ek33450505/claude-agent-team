@@ -55,7 +55,7 @@ Provide findings organized by priority:
 Include the specific file+line for each finding. End with a merge recommendation: `APPROVE`, `REQUEST_CHANGES`, or `DISCUSS`.
 
 ## Response Budget
-Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show.
+Keep your prose and findings under **3000 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show.
 
 ## Handoff Block (MANDATORY in multi-agent chains)
 

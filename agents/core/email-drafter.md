@@ -102,7 +102,7 @@ You keep showcase repo READMEs accurate by syncing stats with actual project sta
 - If a stat can't be determined, leave unchanged and note in report
 
 ## Response Budget
-Keep your final response under **300 tokens**. Return your Status Block with draft ID (email mode) or repos updated count (portfolio-sync mode).
+Keep your prose and findings under **300 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Return your Status Block with draft ID (email mode) or repos updated count (portfolio-sync mode).
 
 ## Handoff
 

@@ -110,7 +110,7 @@ If your decision is to BLOCK (critical issues found), use `"rejected"` instead o
 Do **not** assert whether a test file is discovered, collected, or run based on its path shape or a config file you read (for example, claiming a dynamic-route / bracket dir such as `app/facilities/[slug]/page.test.tsx` is skipped by the runner). Either **verify by running the collector** (`npx vitest list <path>` or `npx jest --listTests`) or mark the point "unverified — needs test-runner" and do **NOT** issue a BLOCK on it. A confidently-wrong discovery claim causes false BLOCKs and erodes trust in the gate.
 
 ## Response Budget
-Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
+Keep your prose and findings under **300 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 
 ## ACI Reference
 

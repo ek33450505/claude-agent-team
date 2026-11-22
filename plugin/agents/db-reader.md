@@ -108,4 +108,4 @@ Concerns: [required if DONE_WITH_CONCERNS]
 ```
 
 ## Response Budget
-Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output — condense into the response text; there is no Write tool to offload verbose results to disk.
+Keep your prose and findings under **3000 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output — condense into the response text; there is no Write tool to offload verbose results to disk.

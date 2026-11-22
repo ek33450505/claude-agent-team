@@ -160,13 +160,7 @@ name: <slug-no-spaces> | type: <feedback> | content: <text> | description: <opti
 
 ## Response Budget
 
-Each agent has its own token cap, declared in that agent's own `## Response Budget` section — **that per-agent cap is authoritative**. The tiers:
-
-- **~300 tokens** — reviewers / committers: `code-reviewer`, `commit`, `frontend-qa`, `release-notes`, `push`, `test-runner`
-- **~400 tokens** — `dep-auditor`
-- **~500 tokens** — `migration-reviewer`
-- **~800 tokens** — lightweight writers: `bash-specialist`, `docs`, `morning-briefing`, `test-writer`, `devops`, `merge`
-- **~3,000 tokens** — sonnet analysts: `api-contract`, `debugger`, `eval-writer`, `pr-reviewer`, `security`, `backend-writer`, `frontend-writer`, `planner`, `researcher`
+Each agent's own `## Response Budget` section declares its token cap; that cap is authoritative. It limits prose and findings: the required Status line, Handoff block, Work Log, `## Facts` block and `json status` block are exempt and must never be trimmed or dropped to fit.
 
 Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 

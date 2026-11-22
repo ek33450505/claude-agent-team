@@ -150,7 +150,7 @@ Before the status block, always output a Work Log so the user can see what was p
 ```
 
 ## Response Budget
-Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
+Keep your prose and findings under **300 tokens**. The required Status line, Handoff block, Work Log, `## Facts` block and `json status` block do not count toward this cap; never trim them to fit. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 
 ## Output caps
 
