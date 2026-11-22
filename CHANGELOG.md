@@ -4,6 +4,41 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+**Upgrading:** run `bash install.sh`, then `cast rules sync --apply` so `~/.claude/rules/` picks up the rewritten
+`python.md`, `working-conventions.md` and `tests.md`. To give the commit agent a personal default trailer, set
+`co_author_trailer` in `~/.claude/cast.json` (it accepts a `{model}` placeholder).
+
+### Fixed
+- **Large hook payloads were silently dropped on Linux.** Ten hooks passed the JSON payload in the `CAST_INPUT`
+  environment variable. Linux caps one env string at 128 KiB, so a long prompt, tool error or compaction payload made
+  exec fail with E2BIG and the record was lost (macOS fails the same way above ~1 MiB of total environment). Hooks now
+  read the payload from stdin, or from fd 3 where a heredoc holds stdin; no script reads or sets `CAST_INPUT`.
+  Regression tests feed 1.5 MiB payloads to the tool-failure, user-prompt and precompact hooks.
+- **A repo name could forge the resume-distillate fence.** The SessionStart resume hook put the raw repo directory name
+  inside the trust-fence header, so a directory named like an opening tag could fake the fence. The header and the
+  session title now use a copy limited to `[A-Za-z0-9._-]`; file lookup still uses the raw name.
+- **Retiring Haiku 4.5 pins.** `cast-batch-dispatch.sh` and `cast-managed-agent.sh` default to `claude-haiku-5-5`, and
+  `cast-upgrade-score.sh` uses the CLI's `haiku` alias.
+- **The push agent could push a work repo.** It now stops with BLOCKED for `repo_class: work`, for a bitbucket.org
+  origin with no repo_class, and when `.claude/cast.json` cannot be parsed; no flag overrides this. The planner no
+  longer schedules a push batch for work repos.
+- **Agent response caps conflicted with required output.** Each agent's cap now covers prose and findings only; the
+  Status line, Handoff block, Work Log, Facts block and `json status` block are exempt and must not be trimmed.
+- **commit.md asked for the "no approval record" WARN in the commit body**, contradicting working-conventions; it now
+  stays in the agent's output. debugger gains `Write` so it can create the regression tests it is asked to write.
+
+### Added
+- **User-level commit trailer.** In personal repos without a repo-specific `co_author_trailer`, the commit agent falls
+  back to `co_author_trailer` in `~/.claude/cast.json` (`"none"` omits it; `{model}` takes the session model named in
+  the dispatch, never the agent's own). Work-repo omit rules still win.
+
+### Changed
+- **Prompt cleanup from Claude Code's prompt audit.** Agent and skill files lose incident history, frozen numbers,
+  author notes, the speculative Advisor Tool sections, "haiku 4.5" pins and fixed read/batch caps; `/cast-audit` loses
+  its unshipped scheduling sections; laconic's default level now defers to the output-style rules. rules-core drops
+  its `MANDATORY:` and `HARD RULE (added <date>)` labels and the POLICY CHANGE banner without changing any rule, and
+  the python rule now says to pass hook payloads on stdin or fd 3, never in an env var.
+
 ## [10.8.0] — 2026-11-20
 
 **Upgrading:** run `bash install.sh`. Every `managed-settings.d` fragment shipped in the repo is now overwritten on
