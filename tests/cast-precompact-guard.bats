@@ -691,3 +691,18 @@ c.execute("COMMIT")
   assert_output --regexp '"decision":[[:space:]]*"block"'
   assert_output --partial "sessions DB query failed"
 }
+
+@test "PreCompact guard N-11: a ~1.5 MiB payload still reaches the log script (no env-var E2BIG drop)" {
+  local db="$BATS_TEST_TMPDIR/big.db" payload="$BATS_TEST_TMPDIR/big.json"
+  mkdir -p "$HOME/.claude/scripts"
+  cp "$REPO_DIR/scripts/cast-precompact-log.py" "$REPO_DIR/scripts/cast_db.py" "$HOME/.claude/scripts/"
+  python3 -I -c '
+import json, sys
+json.dump({"trigger": "manual", "session_id": "big-1", "transcript_path": "/x", "pad": "A" * 1572864}, sys.stdout)
+' > "$payload"
+  [ "$(wc -c < "$payload")" -gt 1500000 ]
+  run --separate-stderr bash -c "CAST_DB_PATH='$db' bash '$HOOK_SH' < '$payload'"
+  assert_proceeds
+  run sqlite3 "$db" "SELECT count(*) FROM compaction_events WHERE session_id='big-1'"
+  assert_output "1"
+}

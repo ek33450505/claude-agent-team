@@ -33,7 +33,7 @@ set -euo pipefail
 _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 
-INPUT="$(cat 2>/dev/null || true)"
+cat >/dev/null 2>&1 || true
 
 # Capture launchctl output via overridable command (enables deterministic testing)
 LAUNCHCTL="${CAST_HEALTH_LAUNCHCTL_CMD:-launchctl}"

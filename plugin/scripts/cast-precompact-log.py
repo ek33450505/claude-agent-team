@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """cast-precompact-log.py — observability logging for PreCompact events.
-Reads CAST_INPUT env var (JSON), writes compaction_events to cast.db.
+Reads the PreCompact JSON payload on stdin, writes compaction_events to cast.db.
 Exits 0 always, logs all failures to hook_failures table.
 """
 
@@ -10,7 +10,10 @@ import sys
 import uuid
 from datetime import datetime, timezone
 
-raw = os.environ.get("CAST_INPUT", "")
+try:
+    raw = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.buffer.read().decode("utf-8", errors="replace")
+except (OSError, ValueError, AttributeError):
+    raw = ""
 try:
     data = json.loads(raw) if raw else {}
 except Exception:

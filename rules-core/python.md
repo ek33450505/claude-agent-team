@@ -11,7 +11,7 @@ globs:
 - DB path: `os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))`
 - Error handling: catch specific exceptions, log to `~/.claude/logs/`, never crash the hook pipeline
 - Schema changes: use `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN` with try/except for idempotency
-- Stdin parsing: `json.loads(os.environ.get("CAST_INPUT", ""))` pattern with try/except
+- Hook payload: read it from stdin (`json.loads(sys.stdin.read())`), or from fd 3 when a heredoc owns stdin (bash `3< <(printf '%s' "$INPUT")`, Python `os.fdopen(3)`), with try/except. Never pass it in an env var: Linux caps one env string at 128 KiB, so large payloads fail with E2BIG and are silently dropped.
 - Use f-strings for string formatting
 - Type hints on function signatures where practical
 - No global state — each script execution is independent

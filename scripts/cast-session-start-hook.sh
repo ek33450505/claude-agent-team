@@ -27,7 +27,7 @@ INPUT="$(cat 2>/dev/null || true)"
 export CAST_PANE_ID_FOR_HOOK="${CAST_DESKTOP_PANE_ID:-}"
 
 # Consolidated block: session upsert (JSONL + DB) and pane-bindings both parse
-# the same CAST_INPUT on the unconditional hot path, so they share ONE python3
+# the same hook payload (fd 3) on the unconditional hot path, so they share ONE python3
 # cold start instead of two. Each responsibility keeps its own try/except so a
 # failure in one does not skip the other (matches prior process independence).
 python3 -I - 3< <(printf '%s' "$INPUT") <<'PYEOF' || _log_error "session-start JSONL+DB+pane-bindings block failed (exit $?)"

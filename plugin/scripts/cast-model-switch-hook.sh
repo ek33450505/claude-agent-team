@@ -51,7 +51,7 @@ def _read_payload():
         with os.fdopen(3, encoding="utf-8", errors="replace") as f:
             return f.read()
     except OSError:
-        return os.environ.get("CAST_INPUT", "")
+        return ""
 raw = _read_payload(); db_path = os.environ.get("DB_PATH_VAL", "")
 try: data = json.loads(raw)
 except Exception: sys.exit(0)
