@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.9.0] — 2026-11-22
+
 **Upgrading:** run `bash install.sh`, then `cast rules sync --apply` so `~/.claude/rules/` picks up the rewritten
 `python.md`, `working-conventions.md` and `tests.md`. To give the commit agent a personal default trailer, set
 `co_author_trailer` in `~/.claude/cast.json` (it accepts a `{model}` placeholder).
