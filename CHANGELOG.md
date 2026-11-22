@@ -4,6 +4,30 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+### Security
+- **Session-start resume injection could pick up another repo's handoff.** `cast-resume-inject-hook.sh` matched
+  hand-written handoffs by filename prefix, so a repo named `cast` (or a clone named after the prefix of a real repo)
+  received `cast-desktop` handoffs in its context. A handoff whose frontmatter has `repo:` is now injected only when it
+  equals the repo name exactly; without `repo:`, a file that matches a longer known repo name (from `*-auto.md` files
+  and other handoffs' `repo:` lines) is skipped. `repo:` values follow YAML comment and quoting rules
+  (`repo: "cast" # note` is `cast`; a blank or comment-only value matches nothing). Limit: a handoff without `repo:` for
+  a repo that has no auto file and no `repo:` handoff can still match a shorter-named repo, so give hand-written
+  handoffs a `repo:` line.
+- **A FIFO in `~/.claude/resume-prompts/` could hang session start.** Handoff files are now opened non-blocking and read
+  only if they are regular files, which also closes an older race where the chosen file was checked with `-f` and then
+  read with `cat`. Only regular files can be selected (symlinks, FIFOs and other special files can no longer hide an
+  older valid handoff), and names containing a tab, a newline or invalid UTF-8 are skipped.
+- **Smaller hardening in the same hook.** The injected body is capped at 64 KiB with a visible truncation note; an
+  unreadable or empty chosen handoff is logged to `hook-errors.log` instead of failing silently; every log line is
+  reduced to printable ASCII and capped at 1024 bytes; the `systemMessage` banner strips control and line-separator
+  characters, as the session title already did; a tab in `$HOME` no longer truncates the handoff path; invalid UTF-8
+  inside a handoff is replaced with U+FFFD.
+
+### Fixed
+- **Resume handoffs over 128 KiB were silently not injected on Linux.** `cast-resume-inject-hook.sh` passed the handoff
+  body to Python in the `CAST_RI_BODY` environment variable, which hits Linux's 128 KiB per-string limit (E2BIG). The
+  body now goes over a pipe, as the other hooks' payloads did in 10.9.0.
+
 ## [10.9.0] — 2026-11-22
 
 **Upgrading:** run `bash install.sh`, then `cast rules sync --apply` so `~/.claude/rules/` picks up the rewritten
