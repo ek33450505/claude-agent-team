@@ -2,7 +2,7 @@
 name: debugger
 description: >
   Root-cause debugging of concrete failures — a reproduced error, a stack trace, a failing test, or observably wrong runtime behavior. Use when investigation needs more than one inline tool call. NOT for code-quality concerns (use code-reviewer), writing tests for passing code (use test-writer), or review-only findings; debugger edits code and returns for the dispatching session to review and commit, so route only confirmed defects.
-tools: Read, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 50

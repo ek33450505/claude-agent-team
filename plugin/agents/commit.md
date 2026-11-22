@@ -49,7 +49,7 @@ The commit agent MUST NOT bypass this gate. Use CAST_COMMIT_AGENT=1 prefix only 
 
 **Fallback when NO task_id is supplied (applies only then):** With a task_id, a missing or unreadable state file is exit 1 → BLOCKED like any missing approval.
 - Emit a visible WARN (not a block, not a silent pass): `[WARN] No approval record found for task_id=<value> — proceeding with commit. Ensure code-reviewer ran before this commit. If this is a repeated miss, the review-dispatch plumbing may need investigation (see docs/phase14-review-plumbing.md).`
-- Include the warn text in the commit message body (not the subject line) so it is visible in `git log`
+- Keep the WARN out of the commit message: report it in your output and Work Log only. The dispatching session states review provenance in the prompt (rules: working-conventions.md → Dispatch-Prompt Contract).
 - Continue with the commit — do not block on a missing approval record when task_id was not explicitly provided
 
 This surfaces the gap without creating a hard block for every direct-dispatch commit (which legitimately won't have a task_id).
@@ -68,21 +68,27 @@ Before step 7, when you compose the message yourself (not needed for a dispatche
 ```bash
 CAST_JSON="$(git rev-parse --show-toplevel 2>/dev/null)/.claude/cast.json"
 if [[ -f "$CAST_JSON" ]]; then
-  REPO_CLASS="$(python3 -c "import json,sys; d=json.load(open('$CAST_JSON')); print(d.get('repo_class','personal'))" 2>/dev/null || echo personal)"
-  CO_AUTHOR_TRAILER="$(python3 -c "import json,sys; d=json.load(open('$CAST_JSON')); print(d.get('co_author_trailer',''))" 2>/dev/null || echo '')"
+  REPO_CLASS="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('repo_class','personal'))" "$CAST_JSON" 2>/dev/null || echo personal)"
+  CO_AUTHOR_TRAILER="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('co_author_trailer') or '')" "$CAST_JSON" 2>/dev/null || echo '')"
 else
   REPO_CLASS="personal"
   CO_AUTHOR_TRAILER=""
+fi
+USER_CAST_JSON="${HOME:-}/.claude/cast.json"
+USER_CO_AUTHOR_TRAILER=""
+if [[ -f "$USER_CAST_JSON" ]]; then
+  USER_CO_AUTHOR_TRAILER="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('co_author_trailer') or '')" "$USER_CAST_JSON" 2>/dev/null || echo '')"
 fi
 ```
 
 Trailer rules (apply ONLY when this agent composes the message itself; evaluated in order):
 - If `co_author_trailer` is `"none"`: omit trailer entirely (any `repo_class`)
 - If `co_author_trailer` is a non-empty string other than `"none"` and `"claude"`: use it verbatim as the trailer value
-- If `co_author_trailer` is `"claude"` or empty AND `repo_class` is `"personal"`: include `Co-Authored-By: Claude <noreply@anthropic.com>`
+- If `co_author_trailer` is `"claude"` or empty AND `repo_class` is `"personal"`: if `USER_CO_AUTHOR_TRAILER` is `"none"`, omit the trailer; if it is any other non-empty string except `"claude"`, use it verbatim; otherwise include `Co-Authored-By: Claude <noreply@anthropic.com>`
 - If `repo_class` is `"work"` and `co_author_trailer` is empty or `"claude"`: **omit trailer** (work-projects rule)
-- Default (no cast.json): include Claude trailer (existing behavior)
-- Precedence (self-composed messages only; a trailer given in the dispatch PROMPT text; a supplied `-F` file is governed solely by step 7): (1) the repo `.claude/cast.json` omit rules above win (`repo_class: work` with `co_author_trailer` empty/`claude`/`none` → no trailer, even if the dispatch prompt supplies one); (2) otherwise a dispatch-supplied trailer REPLACES the default Claude trailer and any cast.json verbatim value; (3) otherwise the rules above apply. If the dispatch prompt supplies a `Co-Authored-By:` trailer, it is the dispatching session's attribution. Use it verbatim. It names the model that authored the work (e.g. Opus or Sonnet), not this agent's own model. Never flag a model-name difference between the trailer and yourself as a mismatch, and never report your own model as the session's.
+- Default (no repo cast.json): same as the personal (`"claude"` or empty) rule above — `USER_CO_AUTHOR_TRAILER` (`"none"` omits, any other non-empty value except `"claude"` verbatim) if set, else the Claude trailer
+- `{model}` placeholder: if the chosen trailer contains the literal text `{model}`, replace it with the session model named in the dispatch prompt (e.g. "Claude Opus 5.5"). If the prompt names no model, delete the whole parenthetical that contains `{model}` together with the one space before it (e.g. ` ({model})` or ` (model: {model})`); delete any bare `{model}` not in parentheses. Never guess. Never substitute your own model.
+- Precedence (self-composed messages only; a trailer given in the dispatch PROMPT text; a supplied `-F` file is governed solely by step 7): (1) the repo `.claude/cast.json` omit rules above win (`repo_class: work` with `co_author_trailer` empty/`claude`/`none` → no trailer, even if the dispatch prompt supplies one); (2) otherwise a dispatch-supplied trailer REPLACES the default Claude trailer and any repo or user cast.json value; (3) otherwise the rules above apply. If the dispatch prompt supplies a `Co-Authored-By:` trailer, it is the dispatching session's attribution. Use it verbatim. It names the model that authored the work (e.g. Opus or Sonnet), not this agent's own model. Never flag a model-name difference between the trailer and yourself as a mismatch, and never report your own model as the session's.
 
 ## File Completeness Gate
 
