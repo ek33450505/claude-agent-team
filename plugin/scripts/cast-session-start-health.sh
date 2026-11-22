@@ -41,7 +41,6 @@ LAUNCHCTL_OUTPUT="$("$LAUNCHCTL" list 2>/dev/null || true)"
 
 _HEALTH_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export CAST_HEALTH_SCRIPT_DIR="$_HEALTH_SCRIPT_DIR"
-export CAST_INPUT="$INPUT"
 export CAST_LAUNCHCTL_OUTPUT="$LAUNCHCTL_OUTPUT"
 export CAST_HOME="$HOME"
 

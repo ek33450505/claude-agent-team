@@ -24,11 +24,18 @@ INPUT="$(cat 2>/dev/null || true)"
 
 _CAST_REDACT_SCRIPT="$(dirname "$0")/cast-redact.py"
 _CAST_ROUTER="${_CAST_ROUTER:-"$(dirname "$0")/cast-memory-router.py"}"
-CAST_INPUT="$INPUT" _CAST_REDACT_SCRIPT="$_CAST_REDACT_SCRIPT" _CAST_ROUTER="$_CAST_ROUTER" python3 -I - <<'PYEOF' || true
+_CAST_REDACT_SCRIPT="$_CAST_REDACT_SCRIPT" _CAST_ROUTER="$_CAST_ROUTER" python3 -I - 3< <(printf '%s' "$INPUT") <<'PYEOF' || true
 import json, os
 from datetime import datetime, timezone
 
-raw = os.environ.get("CAST_INPUT", "")
+def _read_payload():
+    # Payload arrives on fd 3 (an env var would hit Linux's 128 KiB per-string limit: E2BIG).
+    try:
+        with os.fdopen(3, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+raw = _read_payload()
 try:
     data = json.loads(raw)
 except Exception:
