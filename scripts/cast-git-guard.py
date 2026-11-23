@@ -5877,11 +5877,46 @@ def _review_gate_module():
 
 
 def _review_gate_block_message(ev: dict, mod) -> str:
-    first = next((r for r in ev['results'] if r[1] in ('blocked', 'unreviewed')), None)
+    failing = [r for r in ev['results'] if r[1] in ('blocked', 'unreviewed')]
+    # A budget row is a timeout, not a verdict: name a real (non-budget) cause ahead of it.
+    real = [r for r in failing if r[2] != 'budget']
+    first = real[0] if real else (failing[0] if failing else None)
+    error = ev.get('error')
+    hatch = (
+        'for docs-only or release-stamp commits add CAST_UNREVIEWED_OK=<reason> '
+        'after CAST_COMMIT_AGENT=1.'
+    )
+    # Message-only branching on the cause: every branch still blocks (the caller decides that).
+    budget = error == 'budget' or any(r[2] == 'budget' for r in ev['results'])
+    if budget and not real:
+        also = (f' The gate also reported: {mod._display(str(error))}.'
+                if error and error != 'budget' else '')
+        return (
+            'BLOCKED by the content-bound review gate: it ran out of time checking the staged '
+            'content against review records (git or the database was slow; is the system under '
+            f'load?). This is not a missing review.{also}\n'
+            f'Remedies: retry the commit; if it keeps happening, {hatch}'
+        )
+    if first is not None and str(first[2]).startswith('unverifiable-command:'):
+        return (
+            'BLOCKED by the content-bound review gate: it cannot verify this command '
+            f'({mod._display(str(first[2]))}), so it cannot tie the commit to the staged content. '
+            'This is not a missing review.\n'
+            'Remedies: use the documented commit shape (CAST_COMMIT_AGENT=1 git [-C <repo-root>] '
+            'commit -F <msg-file> as the FIRST command, nothing chained before it, single line, '
+            f'no pipe); or {hatch}'
+        )
+    if first is None and error:
+        return (
+            'BLOCKED by the content-bound review gate: the gate could not read its inputs '
+            f'(gate error: {mod._display(str(error))}). This is not a missing review.\n'
+            f'Remedies: retry the commit; or {hatch}'
+        )
     if first is not None:
-        where = f'{mod._display(first[0])} ({first[1]}: {first[2]})'
+        where = f'{mod._display(first[0])} ({first[1]}: {mod._display(str(first[2]))})'
     else:
-        where = f"gate error: {ev.get('error')}"
+        # A truthy error with no failing row is handled above, so only 'unknown' reaches here.
+        where = 'gate error: unknown'
     return (
         'BLOCKED by the content-bound review gate: staged content has no matching code-reviewer '
         f'approval. First: {where}.\n'

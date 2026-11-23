@@ -4,6 +4,48 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.9.1] — 2026-11-22
+
+### Security
+- **Session-start resume injection could pick up another repo's handoff.** `cast-resume-inject-hook.sh` matched
+  hand-written handoffs by filename prefix, so a repo named `cast` (or a clone named after the prefix of a real repo)
+  received `cast-desktop` handoffs in its context. A handoff whose frontmatter has `repo:` is now injected only when it
+  equals the repo name exactly; without `repo:`, a file that matches a longer known repo name (from `*-auto.md` files
+  and other handoffs' `repo:` lines) is skipped. `repo:` values follow YAML comment and quoting rules
+  (`repo: "cast" # note` is `cast`; a blank or comment-only value matches nothing). Limit: a handoff without `repo:` for
+  a repo that has no auto file and no `repo:` handoff can still match a shorter-named repo, so give hand-written
+  handoffs a `repo:` line.
+- **A FIFO in `~/.claude/resume-prompts/` could hang session start.** Handoff files are now opened non-blocking and read
+  only if they are regular files, which also closes an older race where the chosen file was checked with `-f` and then
+  read with `cat`. Only regular files can be selected (symlinks, FIFOs and other special files can no longer hide an
+  older valid handoff), and names containing a tab, a newline or invalid UTF-8 are skipped.
+- **Smaller hardening in the same hook.** The injected body is capped at 64 KiB with a visible truncation note; an
+  unreadable or empty chosen handoff is logged to `hook-errors.log` instead of failing silently; every log line is
+  reduced to printable ASCII and capped at 1024 bytes; the `systemMessage` banner strips control and line-separator
+  characters, as the session title already did; a tab in `$HOME` no longer truncates the handoff path; invalid UTF-8
+  inside a handoff is replaced with U+FFFD.
+
+### Fixed
+- **Resume handoffs over 128 KiB were silently not injected on Linux.** `cast-resume-inject-hook.sh` passed the handoff
+  body to Python in the `CAST_RI_BODY` environment variable, which hits Linux's 128 KiB per-string limit (E2BIG). The
+  body now goes over a pipe, as the other hooks' payloads did in 10.9.0.
+- **Git-guard tests failed on a busy machine.** The perf tests' tripwire was wall-clock time, and the review-gate tests
+  left the guard's wall-clock budgets uncontrolled, so a healthy guard failed them under heavy CPU load. The tripwire
+  now counts CPU time (with a 60 s wall-clock net for real hangs), the review-gate tests pin the budgets except the
+  ones that test them, and the perf tests start no real `git` processes. Test-only; the guard is unchanged.
+- **The review gate said "no matching code-reviewer approval" when the real problem was elsewhere.** When the gate ran
+  out of time under load, could not verify the commit command's shape, or could not read git or its database, the BLOCK
+  still told you to run `code-reviewer`. The message now names the actual cause and its remedy (retry, use the
+  documented commit shape, or the gate error). A real reviewer block or missing review is always named first, with the
+  unchanged message. Reasons and errors in the message are stripped of control characters. Every commit the gate
+  blocked before is still blocked; only the text changed.
+
+### Changed
+- **The resume-inject hook starts Python once instead of twice.** Choosing, reading and formatting the handoff now
+  happen in one new script, `scripts/cast-resume-inject.py`, called from a much smaller
+  `cast-resume-inject-hook.sh`. Output is unchanged. If the `.py` is missing, the hook does nothing, as before.
+  `install.sh` deploys the new file like every other `scripts/*.py`; reinstall to get it.
+
 ## [10.9.0] — 2026-11-22
 
 **Upgrading:** run `bash install.sh`, then `cast rules sync --apply` so `~/.claude/rules/` picks up the rewritten
