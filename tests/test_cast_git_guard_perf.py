@@ -18,9 +18,10 @@ Three fixes are pinned here:
   3. `_GIT_MENTION` / `_MAX_GIT_SEGMENT_LEN` -- `shlex.split` is O(n^2) in its longest token, so
      non-git segments are not tokenised and an over-long git-mentioning segment is refused.
 
-Every timing test runs under a SIGALRM tripwire (a BaseException, so `evaluate`'s own
-`except Exception: return 0, ''` cannot swallow it): a regression FAILS in seconds instead of
-hanging the suite for the 40+ s the unfixed guard needs.
+Every timing assertion runs under a CPU tripwire (ITIMER_PROF / SIGPROF; a BaseException, so
+`evaluate`'s own `except Exception: return 0, ''` cannot swallow it): a regression FAILS in
+seconds instead of hanging the suite for the 40+ s the unfixed guard needs. SIGALRM /
+ITIMER_REAL is only a 60 s wall-clock net for a genuine hang.
 
 HOME is redirected to a temp dir and `_record_hatch` is mocked: a hatched command never spawns
 the audit subprocess or touches a real cast.db. Hyphenated filename loaded via importlib, same
@@ -52,14 +53,27 @@ G = 'gi' + 't'            # the verb is assembled so no literal guarded command 
 # GitHub's ubuntu runner vs ~0.3-0.9 s locally, so 1.0 s was a machine-dependent flake. This bound
 # is the secondary check: quadratic regressions take >= 4 s, which the verdict-message assertions
 # and TRIPWIRE_SECS catch. BOUND_SECS is measured in CPU time (self + children), not wall time:
-# load from parallel processes inflated wall time to 2.6 s on a healthy guard. TRIPWIRE_SECS stays
-# wall-clock.
+# load from parallel processes inflated wall time to 2.6 s on a healthy guard. TRIPWIRE_SECS is
+# CPU too (ITIMER_PROF counts only this process, not children): a 4 s WALL tripwire fired on
+# healthy guards at load avg 40-150. The wall ceiling is now ONLY the generous WALL_NET_SECS hang
+# net (ITIMER_REAL); the old `wall < 5 * BOUND_SECS` (10 s) ceiling was dropped on purpose, since
+# wall time is load noise and CPU is the bound. `_Timed.setUp` stubs the guard's real-child spawn
+# seams (see there) so no child CPU escapes the tripwire.
 BOUND_SECS = 2.0
-TRIPWIRE_SECS = 4.0       # a regressed guard is aborted here instead of running for 40+ s
+TRIPWIRE_SECS = 4.0       # CPU seconds: a regressed guard is aborted here instead of running 40+ s
+WALL_NET_SECS = 60.0      # wall-clock safety net for a genuine blocking hang, not a perf bound
 
 
 class _TooSlow(BaseException):
     """BaseException on purpose: evaluate() ends in `except Exception: return 0, ''`."""
+
+
+class _CpuTooSlow(_TooSlow):
+    pass
+
+
+class _WallTooSlow(_TooSlow):
+    pass
 
 
 def _pad(n, unit=G + ' '):
@@ -67,6 +81,9 @@ def _pad(n, unit=G + ' '):
 
 
 class _Timed(unittest.TestCase):
+
+    STUB_SPAWNS = True   # classes that count/mock the spawns' subprocess themselves set False
+
     def setUp(self):
         self.home = os.path.realpath(tempfile.mkdtemp(prefix='cast-gitperf-home-'))
         self.addCleanup(shutil.rmtree, self.home, True)
@@ -78,37 +95,100 @@ class _Timed(unittest.TestCase):
         rec = mock.patch.object(gg, '_record_hatch')
         rec.start()
         self.addCleanup(rec.stop)
+        if self.STUB_SPAWNS:
+            # Two guard seams would start a real `git rev-parse` child, whose CPU ITIMER_PROF
+            # does not see. Stubbed with their own failure values, so verdicts are unchanged in these tests:
+            #   _repo_toplevel_uncached -> ''   (the hatch audit's repo lookup)
+            #   _update_ref_overwrites_existing -> False   (ref absent, so update-ref is allowed)
+            # The guard's other spawn sites short-circuit because repo is ''.
+            for name, ret in (('_repo_toplevel_uncached', ''),
+                              ('_update_ref_overwrites_existing', False)):
+                st = mock.patch.object(gg, name, return_value=ret)
+                st.start()
+                self.addCleanup(st.stop)
 
     def run_bash(self, cmd):
-        """(code, msg, (cpu_secs, wall_secs)) for evaluate('Bash', cmd); fails the test past TRIPWIRE_SECS."""
-        def _alarm(signum, frame):
-            raise _TooSlow()
-        have_alarm = hasattr(signal, 'setitimer') and hasattr(signal, 'SIGALRM')
-        previous = signal.signal(signal.SIGALRM, _alarm) if have_alarm else None
+        """(code, msg, (cpu_secs, wall_secs)) for evaluate('Bash', cmd)."""
+        (code, msg), timing = self.run_timed(
+            lambda: gg.evaluate('Bash', {'command': cmd}), len(cmd))
+        return code, msg, timing
+
+    def run_timed(self, fn, size):
+        """(fn(), (cpu_secs, wall_secs)) for a zero-argument callable over `size` chars of input.
+
+        In-body tripwire: this process's own CPU past TRIPWIRE_SECS (ITIMER_PROF), plus a
+        WALL_NET_SECS wall-clock hang net (ITIMER_REAL). The reported cpu is os.times self +
+        children. Handlers raise only while `state['armed']`; armed is cleared right after `fn()`
+        returns, at the top of each except clause and in `finally`, after which a signal is only
+        recorded in `fired`. `self.fail` is called only after cleanup, with handlers restored and
+        disarmed, from `tripped`, `fired` or the measured values."""
+        state = {'armed': True, 'fired': None}
+        tripped = None
+
+        def _cpu_alarm(signum, frame):
+            if state['armed']:
+                raise _CpuTooSlow()
+            state['fired'] = state['fired'] or 'cpu'
+
+        def _wall_alarm(signum, frame):
+            if state['armed']:
+                raise _WallTooSlow()
+            state['fired'] = state['fired'] or 'wall'
+        have_alarm = all(hasattr(signal, n) for n in ('setitimer', 'SIGALRM', 'SIGPROF'))
+        installed = []   # (signum, previous handler) for each handler actually installed
         w0 = time.perf_counter()
         c0 = os.times()
         try:
             if have_alarm:
-                signal.setitimer(signal.ITIMER_REAL, TRIPWIRE_SECS)
-            code, msg = gg.evaluate('Bash', {'command': cmd})
-        except _TooSlow:
-            self.fail(f'git guard still running after {TRIPWIRE_SECS} s on a {len(cmd)}-char '
-                      f'command (quadratic regression)')
+                for signum, handler in ((signal.SIGPROF, _cpu_alarm), (signal.SIGALRM, _wall_alarm)):
+                    # getsignal() is None for a handler installed from C; restoring None raises
+                    # TypeError, so that case restores SIG_DFL.
+                    prev = signal.getsignal(signum)
+                    signal.signal(signum, handler)
+                    installed.append((signum, prev))   # only once actually installed
+                signal.setitimer(signal.ITIMER_PROF, TRIPWIRE_SECS)
+                signal.setitimer(signal.ITIMER_REAL, WALL_NET_SECS)
+            result = fn()
+            state['armed'] = False
+        except _CpuTooSlow:
+            state['armed'] = False
+            tripped = 'cpu'
+        except _WallTooSlow:
+            state['armed'] = False
+            tripped = 'wall'
         finally:
+            state['armed'] = False
             if have_alarm:
-                signal.setitimer(signal.ITIMER_REAL, 0)
-                signal.signal(signal.SIGALRM, previous)
+                for timer in (signal.ITIMER_PROF, signal.ITIMER_REAL):
+                    try:
+                        signal.setitimer(timer, 0)
+                    except (ValueError, OSError):
+                        pass   # must not skip the handler restore below
+                for signum, prev in installed:
+                    try:
+                        signal.signal(signum, prev if prev is not None else signal.SIG_DFL)
+                    except (ValueError, OSError):
+                        pass   # one failed restore must not skip the rest
         wall = time.perf_counter() - w0
         c1 = os.times()
         cpu = ((c1.user - c0.user) + (c1.system - c0.system)
                + (c1.children_user - c0.children_user) + (c1.children_system - c0.children_system))
-        return code, msg, (cpu, wall)
+        if tripped == 'cpu':
+            self.fail(f'git guard used more than {TRIPWIRE_SECS} s of CPU on a {size}-char '
+                      f'input (quadratic regression)')
+        if tripped == 'wall':
+            self.fail(f'git guard still running after {WALL_NET_SECS} s wall on a {size}-char '
+                      f'input (blocking hang)')
+        if state['fired'] or cpu >= TRIPWIRE_SECS or wall >= WALL_NET_SECS:
+            self.fail(f"git guard exceeded its budget (tripped: {state['fired'] or 'measured'}): "
+                      f'CPU {cpu:.2f} s self+children via os.times (limit {TRIPWIRE_SECS} s), '
+                      f'WALL {wall:.2f} s (limit {WALL_NET_SECS} s) on a {size}-char input')
+        return result, (cpu, wall)
 
     def assert_blocked_fast(self, cmd, why=''):
         code, msg, (cpu, wall) = self.run_bash(cmd)
         self.assertEqual(code, 2, f'{why}: not blocked: {msg!r}')
         self.assertLess(cpu, BOUND_SECS, f'{why}: CPU {cpu:.2f} s over the bound ({wall:.2f} s wall)')
-        self.assertLess(wall, 5 * BOUND_SECS, f'{why}: WALL {wall:.2f} s over the ceiling (hang/wait?)')
         return msg
 
 
@@ -153,6 +233,9 @@ class TestRepeatedGitTokensBeforeTheVerb(_Timed):
                  'reflog ', 'filter-branch ', 'restore ', '-c ', '-C ', '--no-pager ', '']
         for v in units:
             unit = G + ' ' + v
+            # update-ref: the setUp seam stub is safe here; at this padding size the scan-work
+            # bound (`_MAX_GIT_SCAN_WORK`) refuses the command before
+            # `_update_ref_overwrites_existing` is reached. See TestUpdateRefScanIsTimed.
             self.assert_blocked_fast(
                 unit * (100000 // len(unit)) + '; ' + G + ' push origin main', repr(unit))
 
@@ -391,17 +474,50 @@ class TestContinuationJoinIsLinearAndIdentical(_Timed):
         self.assertIn('Raw `git push` blocked', msg)   # the real verdict, not a bound/timeout
 
     def test_the_join_alone_is_linear(self):
-        c0 = os.times()
-        gg._join_continuations('a\\\n' * 1600000)
-        c1 = os.times()
-        self.assertLess((c1.user - c0.user) + (c1.system - c0.system), BOUND_SECS, 'CPU over the bound')
-        self.assertLess(c1.elapsed - c0.elapsed, 5 * BOUND_SECS, 'WALL over the ceiling (hang/wait?)')
+        text = 'a\\\n' * 1600000
+        _, (cpu, _wall) = self.run_timed(lambda: gg._join_continuations(text), len(text))
+        self.assertLess(cpu, BOUND_SECS, 'CPU over the bound')
+        # Wall ceiling is run_timed's 60 s net (was 5 * BOUND_SECS = 10 s) on purpose: wall is load noise.
+
+
+class TestUpdateRefScanIsTimed(_Timed):
+    """The real `_update_ref_overwrites_existing` (regex, shlex, `-C` lookup) under padding.
+    `evaluate` never reaches it at 100 KB (the scan-work bound refuses first), so it is timed
+    directly. Only its `rev-parse --verify` child is faked (rc 1 = ref absent)."""
+
+    STUB_SPAWNS = False   # the real seam must run
+
+    # Tighter than the global BOUND_SECS (2 s), which only catches severe blowups. Healthy CPU,
+    # max of 10 runs (os.times has 10 ms resolution): ~0.00 s at 1 KB, ~0.04 s at 100 KB. The
+    # bounds are ~20x the 100 KB figure and a 0.25 s floor at 1 KB, so load noise doesn't flake.
+    BOUND_1KB = 0.25
+    BOUND_100KB = 0.8
+
+    def _timed_scan(self, seg, bound):
+        with mock.patch.object(gg.subprocess, 'run',
+                               return_value=mock.Mock(returncode=1, stdout='')) as run:
+            result, (cpu, _wall) = self.run_timed(
+                lambda: gg._update_ref_overwrites_existing(seg), len(seg))
+        self.assertEqual(run.call_count, 1, 'the verify spawn was not reached (vacuous timing)')
+        # The exact argv the guard builds from `-C <dir>` and the first token after `update-ref`.
+        self.assertEqual(run.call_args.args[0],
+                         ['git', '-C', '/tmp/r', 'rev-parse', '--verify', '--quiet', 'refs/heads/x'])
+        self.assertIs(result, False)
+        self.assertLess(cpu, bound, f'{len(seg)}-char segment: CPU {cpu:.2f} s over {bound} s')
+
+    def test_a_1_KB_update_ref_segment_is_scanned_within_the_bound(self):
+        self._timed_scan(G + ' -C /tmp/r update-ref refs/heads/x ' + 'abc ' * 250, self.BOUND_1KB)
+
+    def test_a_100_KB_update_ref_segment_is_scanned_within_the_bound(self):
+        self._timed_scan(G + ' -C /tmp/r update-ref refs/heads/x ' + 'abc ' * 25000,
+                         self.BOUND_100KB)
 
 
 class TestAuditSpawnsAreMemoisedPerCall(_Timed):
     """Security round 1: `_audit_push_hatch` / `_audit_commit_hatch` spawned one `git rev-parse`
     per hatched segment (uncapped), so ~500 hatched segments (13 KB) ran the guard far past its
     time bound. One spawn per distinct cwd per `_git_evaluate` call answers all of them."""
+    STUB_SPAWNS = False   # these tests mock subprocess.run and count the spawns themselves
 
     def _count_spawns(self, cmd):
         calls = []
@@ -411,7 +527,15 @@ class TestAuditSpawnsAreMemoisedPerCall(_Timed):
             # `rev-parse --verify` rc 1 = "ref does not exist" -> update-ref is ALLOWED, so all
             # 500 segments are evaluated (rc 0 would block on the first and make the count vacuous).
             return mock.Mock(returncode=1 if '--verify' in argv else 0, stdout='/tmp/some-repo\n')
-        with mock.patch.object(gg.subprocess, 'run', side_effect=fake_run):
+        # The commit-hatch audit asks cast_git_safe (a real bash spawn via Popen); fake it too.
+        self.gs_calls = []
+
+        def fake_gs_run(d, args, timeout=10.0):
+            self.gs_calls.append(list(args))
+            return mock.Mock(returncode=0, stdout='/tmp/some-repo\n')
+        fake_gs = mock.Mock(run=fake_gs_run)
+        with mock.patch.object(gg.subprocess, 'run', side_effect=fake_run), \
+                mock.patch.object(gg, '_load_git_safe', return_value=fake_gs):
             result = gg.evaluate('Bash', {'command': cmd})
         return result, calls
 
@@ -425,6 +549,15 @@ class TestAuditSpawnsAreMemoisedPerCall(_Timed):
         (code, _msg), calls = self._count_spawns(cmd)
         self.assertEqual(code, 0)
         self.assertEqual(len([c for c in calls if 'rev-parse' in c]), 1)
+        # 250 hatched commits: `_hatch_commit_git_facts` asks cast_git_safe for HEAD and the common
+        # dir exactly once (memoised per call), not once per hatched commit.
+        # Depends on STUB_SPAWNS = False (a stubbed '' repo would empty this list) and covers EVERY
+        # cast_git_safe call on the evaluate path, so a new unrelated call site lands here too.
+        self.assertEqual(self.gs_calls, [['rev-parse', '--verify', '-q', 'HEAD'],
+                                         ['rev-parse', '--path-format=absolute', '--git-common-dir']],
+                         'cast_git_safe calls on the evaluate path changed: either the hatch facts '
+                         'are no longer memoised (expected exactly these 2) or another call site '
+                         'now spawns through cast_git_safe')
 
     def test_500_update_ref_segments_naming_one_ref_spawn_one_verify(self):
         (_code, _msg), calls = self._count_spawns((G + ' update-ref refs/heads/x abc; ') * 500)

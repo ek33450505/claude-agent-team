@@ -27,6 +27,10 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 - **Resume handoffs over 128 KiB were silently not injected on Linux.** `cast-resume-inject-hook.sh` passed the handoff
   body to Python in the `CAST_RI_BODY` environment variable, which hits Linux's 128 KiB per-string limit (E2BIG). The
   body now goes over a pipe, as the other hooks' payloads did in 10.9.0.
+- **Git-guard tests failed on a busy machine.** The perf tests' tripwire was wall-clock time, and the review-gate tests
+  left the guard's wall-clock budgets uncontrolled, so a healthy guard failed them under heavy CPU load. The tripwire
+  now counts CPU time (with a 60 s wall-clock net for real hangs), the review-gate tests pin the budgets except the
+  ones that test them, and the perf tests start no real `git` processes. Test-only; the guard is unchanged.
 
 ## [10.9.0] — 2026-11-22
 

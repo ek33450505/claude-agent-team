@@ -37,7 +37,32 @@ T_MID = '2026-10-15T11:00:00Z'
 COMMIT = 'CAST_COMMIT_AGENT=1 git commit -F msg.txt'
 
 
+class _FrozenTime:
+    """Stand-in for the guard's `time` module with a fixed `monotonic()`; all else delegates."""
+    def __init__(self, now):
+        self._now = now
+
+    def monotonic(self):
+        return self._now
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def frozen_guard_clock(now=None):
+    """Patch the guard's clock (`time.monotonic` in its namespace) so elapsed time never moves."""
+    return mock.patch.object(guard, 'time', _FrozenTime(time.monotonic() if now is None else now))
+
+
 class GuardGateCase(unittest.TestCase):
+    # The guard's review-gate time budgets (2.0 s gate, 4.0 s hook, 1.5 s git-spawn deadline) are
+    # wall-clock from guard entry and fail CLOSED, correctly, when git spawns are slow under machine
+    # load. Tests that are not about the budget pin them generous so they stay deterministic. Tests
+    # that exercise the budget path keep the real values (`TestBudget`, `_BUDGET_TESTS`).
+    GENEROUS_BUDGETS = True
+    _BUDGET_TESTS = frozenset({'test_evaluate_budget_leaves_headroom'})
+    _GENEROUS_S = 120.0
+
     @classmethod
     def setUpClass(cls):
         cls._tpl_dir = tempfile.mkdtemp(prefix='guardgate-tpl-')
@@ -85,6 +110,12 @@ class GuardGateCase(unittest.TestCase):
             mock.patch.object(guard, '_HOOK_CWD', self.repo),
             mock.patch.object(guard, '_GUARD_ENTRY', None),   # a stale stamp would age direct calls
         ]
+        if self.GENEROUS_BUDGETS and self._testMethodName not in self._BUDGET_TESTS:
+            patches += [
+                mock.patch.object(guard, '_REVIEW_GATE_BUDGET_S', self._GENEROUS_S),
+                mock.patch.object(guard, '_REVIEW_GATE_HOOK_BUDGET_S', self._GENEROUS_S),
+                mock.patch.object(guard, '_REVIEW_GATE_PARSE_DEADLINE_S', self._GENEROUS_S),
+            ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -301,11 +332,11 @@ class TestEnforceMode(GuardGateCase):
             return {'results': [], 'counts': {}, 'would_block': 0, 'db_ok': True,
                     'error': None, 'root': root, 'staged': False}
 
-        t0 = time.monotonic()
-        with mock.patch.object(mod, 'evaluate', side_effect=slow):
+        # Frozen guard clock: the budget handed to evaluate() is deterministic under load. No wall
+        # assertion on the whole call (it includes unpatched parse/post-gate work).
+        with frozen_guard_clock(), mock.patch.object(mod, 'evaluate', side_effect=slow):
             self.assertEqual(self.ev(COMMIT)[0], 0)
         self.assertLessEqual(seen['budget_s'], guard._REVIEW_GATE_BUDGET_S - 0.5)
-        self.assertLess(time.monotonic() - t0, guard._REVIEW_GATE_BUDGET_S)
 
 
 class TestHatchRecording(GuardGateCase):
@@ -328,7 +359,8 @@ class TestHatchRecording(GuardGateCase):
 
 class TestBudget(GuardGateCase):
     """The budget is measured from guard entry: with 3.8 s of the 4.0 s hook budget already
-    spent, the gate must not start."""
+    spent, the gate must not start. Real budget constants on purpose (see GENEROUS_BUDGETS)."""
+    GENEROUS_BUDGETS = False
 
     def _aged(self, mod):
         return (mock.patch.object(guard, '_GUARD_ENTRY', time.monotonic() - 3.8),
@@ -362,7 +394,7 @@ class TestBudget(GuardGateCase):
             return {'results': [], 'counts': {}, 'would_block': 0, 'db_ok': True,
                     'error': None, 'root': root, 'staged': False}
 
-        with mock.patch.object(guard, '_GUARD_ENTRY', time.monotonic()), \
+        with frozen_guard_clock() as fc, mock.patch.object(guard, '_GUARD_ENTRY', fc.monotonic()), \
                 mock.patch.object(mod, 'evaluate', side_effect=stub):
             guard._review_gate_check(COMMIT, first_segment=True)
         self.assertLessEqual(seen['budget_s'], 1.5)
@@ -393,11 +425,12 @@ class TestBudget(GuardGateCase):
             seen.append(timeout)
             return types.SimpleNamespace(returncode=0, stdout=d + '/.git\n')
 
-        with mock.patch.object(guard, '_GUARD_ENTRY', time.monotonic() - 1.2), \
+        now = time.monotonic()
+        with frozen_guard_clock(now), mock.patch.object(guard, '_GUARD_ENTRY', now - 1.2), \
                 mock.patch.object(guard, '_load_git_safe', return_value=mock.Mock(run=fake_run)):
             dirs, why = guard._review_gate_git_dirs([self.repo])
         self.assertIsNone(why)
-        self.assertTrue(seen and all(t <= 0.31 for t in seen), seen)
+        self.assertTrue(seen and all(abs(t - 0.3) < 1e-6 for t in seen), seen)
 
     def test_git_evaluate_stamps_guard_entry(self):
         with mock.patch.object(guard, '_GUARD_ENTRY', None):
