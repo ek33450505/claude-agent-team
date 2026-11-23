@@ -703,7 +703,7 @@ _seed_auto_file() {
   # applied so a vacuous copy cannot pass.
   mkdir -p "$BATS_TEST_TMPDIR/hookcopy"
   chmod 755 "$BATS_TEST_TMPDIR/shim"
-  cp "$SCRIPT" "$BATS_TEST_TMPDIR/hookcopy/cast-resume-inject-hook.sh"
+  cp "$SCRIPT" "$REPO_DIR/scripts/cast-resume-inject.py" "$BATS_TEST_TMPDIR/hookcopy/"
   sed "s|^  local git_candidates=(.*)\$|  local git_candidates=(\"$BATS_TEST_TMPDIR/shim/git\")|" \
     "$REPO_DIR/scripts/cast-hook-lib.sh" > "$BATS_TEST_TMPDIR/hookcopy/cast-hook-lib.sh"
   grep -qF "local git_candidates=(\"$BATS_TEST_TMPDIR/shim/git\")" "$BATS_TEST_TMPDIR/hookcopy/cast-hook-lib.sh"
@@ -715,6 +715,75 @@ _seed_auto_file() {
   [ "$output" -ge 1 ]
   run grep 'rev-parse --show-toplevel|unset$' "$SHIM_LOG"
   assert_failure 1
+}
+
+@test "endless stdin does not hang the early-exit path (bounded drain)" {
+  # Proves no hang (not that a drain happened): an unbounded drain never reaches EOF.
+  mkdir -p "$BATS_TEST_TMPDIR/nogit"
+  fifo="$BATS_TEST_TMPDIR/endless.fifo"
+  mkfifo "$fifo"
+  # Writer: endless zeros. exec makes wpid the cat process itself (killing it gives EOF).
+  # fds 3/4 closed so bats does not wait on it.
+  ( exec cat /dev/zero > "$fifo" 2>/dev/null ) 3>&- 4>&- &
+  wpid=$!
+  done_f="$BATS_TEST_TMPDIR/endless.done"
+  pid_f="$BATS_TEST_TMPDIR/endless.pid"
+  rm -f "$done_f" "$pid_f"
+  (
+    cd "$BATS_TEST_TMPDIR/nogit" || exit 1
+    bash "$SCRIPT" < "$fifo" > "$BATS_TEST_TMPDIR/endless.out" 2>&1 3>&- 4>&- &
+    hp=$!
+    echo "$hp" > "$pid_f"
+    wait "$hp"
+    echo $? > "$BATS_TEST_TMPDIR/endless.rc"
+    touch "$done_f"
+  ) 3>&- 4>&- &
+  hpid=$!
+  i=0
+  while [ ! -e "$done_f" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  hung=0
+  [ -e "$done_f" ] || hung=1
+  # Stop the writer (EOF unsticks an unbounded stdin reader).
+  kill "$wpid" 2>/dev/null || true
+  if [ "$hung" -eq 1 ]; then
+    # Hook may be stuck on something else: give it a moment, then kill it and its children.
+    i=0
+    while [ ! -e "$done_f" ] && [ "$i" -lt 30 ]; do
+      sleep 0.1
+      i=$((i + 1))
+    done
+    # Kill only if still running: once done_f exists the subshell reaped the hook PID (reuse risk).
+    if [ ! -e "$done_f" ]; then
+      hp="$(cat "$pid_f" 2>/dev/null || true)"
+      if [ -n "$hp" ]; then
+        pkill -P "$hp" 2>/dev/null || true
+        kill "$hp" 2>/dev/null || true
+      else
+        echo "endless: pid file missing" >&2
+      fi
+      kill "$hpid" 2>/dev/null || true
+    fi
+  fi
+  wait "$hpid" 2>/dev/null || true
+  wait "$wpid" 2>/dev/null || true
+  [ "$hung" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/endless.rc")" -eq 0 ]
+  [ ! -s "$BATS_TEST_TMPDIR/endless.out" ]
+}
+
+@test "cast-resume-inject.py missing next to the hook: silent exit 0" {
+  _seed_auto_file
+  mkdir -p "$BATS_TEST_TMPDIR/nopy"
+  cp "$SCRIPT" "$REPO_DIR/scripts/cast-hook-lib.sh" "$BATS_TEST_TMPDIR/nopy/"
+  cd "$FIXTURE_REPO"
+  run bash "$BATS_TEST_TMPDIR/nopy/cast-resume-inject-hook.sh" </dev/null
+  assert_success
+  assert_output ""
+  run grep -c 'resume-inject: helper missing or unreadable' "$HOME/.claude/logs/hook-errors.log"
+  assert_success
 }
 
 @test "cast-hook-lib missing: silent degrade, bare git is never run" {
@@ -1204,81 +1273,6 @@ _run_hook_deadline() {
   assert_output --partial 'Good auto'
 }
 
-# PATH shim for a deterministic post-selection race. The hook calls python3 three
-# times (selector, body read, JSON build). The shim counts calls; on call #1 (the
-# selector) it runs the real python3, then swaps the chosen file per $PYSHIM_MODE:
-# none | fifo | symlink (to a regular file holding RACED-BODY). All other calls
-# exec the real python3 untouched.
-_install_py_shim() {
-  PYSHIM_DIR="$BATS_TEST_TMPDIR/pyshim"
-  PYSHIM_REAL="$(command -v python3)"
-  PYSHIM_CNT="$BATS_TEST_TMPDIR/pyshim.cnt"
-  PYSHIM_MODE="$1"
-  PYSHIM_TARGET="$BATS_TEST_TMPDIR/raced.md"
-  export PYSHIM_REAL PYSHIM_CNT PYSHIM_MODE PYSHIM_TARGET
-  mkdir -p "$PYSHIM_DIR"
-  echo 0 > "$PYSHIM_CNT"
-  printf 'RACED-BODY\n' > "$PYSHIM_TARGET"
-  cat > "$PYSHIM_DIR/python3" <<'SHIM'
-#!/bin/bash
-n="$(cat "$PYSHIM_CNT" 2>/dev/null || echo 0)"
-n=$((n + 1))
-echo "$n" > "$PYSHIM_CNT"
-if [ "$n" -ne 1 ]; then exec "$PYSHIM_REAL" "$@"; fi
-printf '%s' "$*" > "$PYSHIM_CNT.argv"
-rc=0
-out="$("$PYSHIM_REAL" "$@")" || rc=$?
-path="${out#*$'\t'}"
-case "$PYSHIM_MODE" in
-  fifo) rm -f "$path"; mkfifo "$path" ;;
-  symlink) rm -f "$path"; ln -s "$PYSHIM_TARGET" "$path" ;;
-esac
-printf '%s\n' "$out"
-exit "$rc"
-SHIM
-  chmod +x "$PYSHIM_DIR/python3"
-}
-
-@test "n14: py-shim control - no swap, regular auto is injected (shim works)" {
-  _mk_cast_repo
-  printf '# Shim control body\n' > "$RESUME_DIR/2026-11-22-cast-auto.md"
-  _install_py_shim none
-  cd "$CAST_REPO"
-  run env PATH="$PYSHIM_DIR:$PATH" bash "$SCRIPT" </dev/null
-  assert_success
-  assert_output --partial 'Shim control body'
-  # Selector (call #1, argv carries its CAST_RI_SLUG marker) and body read both ran
-  # through the shim.
-  [ "$(cat "$PYSHIM_CNT")" -ge 2 ]
-  grep -q 'CAST_RI_SLUG' "$PYSHIM_CNT.argv"
-}
-
-@test "n14: chosen file swapped to a FIFO after selection: no hang, logged, nothing injected" {
-  _mk_cast_repo
-  printf '# Raced fifo body\n' > "$RESUME_DIR/2026-11-22-cast-auto.md"
-  _install_py_shim fifo
-  HOOK_PATH_PREFIX="$PYSHIM_DIR"
-  _run_hook_deadline "$RESUME_DIR/2026-11-22-cast-auto.md"
-  [ "$HOOK_RC" -eq 0 ]
-  run grep -c 'additionalContext' "$HOOK_OUT"
-  assert_failure 1
-  run grep -c 'chosen handoff unreadable' "$HOME/.claude/logs/hook-errors.log"
-  assert_success
-}
-
-@test "n14: chosen file swapped to a symlink after selection: not followed, logged" {
-  _mk_cast_repo
-  printf '# Raced link body\n' > "$RESUME_DIR/2026-11-22-cast-auto.md"
-  _install_py_shim symlink
-  cd "$CAST_REPO"
-  run env PATH="$PYSHIM_DIR:$PATH" bash "$SCRIPT" </dev/null
-  assert_success
-  refute_output --partial 'RACED-BODY'
-  refute_output --partial 'additionalContext'
-  run grep -c 'chosen handoff unreadable' "$HOME/.claude/logs/hook-errors.log"
-  assert_success
-}
-
 @test "n14: symlinked sibling auto still feeds known slugs (no cross-repo injection)" {
   _mk_cast_repo
   printf 'LINKED-DESKTOP\n' > "$BATS_TEST_TMPDIR/target.md"
@@ -1325,7 +1319,7 @@ SHIM
   _mk_cast_repo
   hd="$BATS_TEST_TMPDIR/$(printf 'hk\033[31m\rdir')"
   mkdir -p "$hd" 2>/dev/null || skip "filesystem refuses ESC/CR in dir name"
-  cp "$SCRIPT" "$REPO_DIR/scripts/cast-hook-lib.sh" "$hd/"
+  cp "$SCRIPT" "$REPO_DIR/scripts/cast-hook-lib.sh" "$REPO_DIR/scripts/cast-resume-inject.py" "$hd/"
   # Empty chosen auto: logged via _log_error's own message path (name is plain).
   : > "$RESUME_DIR/2026-11-22-cast-auto.md"
   cd "$CAST_REPO"
@@ -1357,7 +1351,7 @@ SHIM
     rem=$((rem - n - 1))
   done
   mkdir -p "$hd" 2>/dev/null || skip "filesystem refuses deep/long path"
-  cp "$SCRIPT" "$REPO_DIR/scripts/cast-hook-lib.sh" "$hd/"
+  cp "$SCRIPT" "$REPO_DIR/scripts/cast-hook-lib.sh" "$REPO_DIR/scripts/cast-resume-inject.py" "$hd/"
   e="$(printf '\xf0\x9f\x98\x80')"
   nm="2026-11-22-cast-"
   for i in $(seq 1 59); do nm="$nm$e"; done

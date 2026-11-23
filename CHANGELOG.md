@@ -38,6 +38,12 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
   unchanged message. Reasons and errors in the message are stripped of control characters. Every commit the gate
   blocked before is still blocked; only the text changed.
 
+### Changed
+- **The resume-inject hook starts Python once instead of twice.** Choosing, reading and formatting the handoff now
+  happen in one new script, `scripts/cast-resume-inject.py`, called from a much smaller
+  `cast-resume-inject-hook.sh`. Output is unchanged. If the `.py` is missing, the hook does nothing, as before.
+  `install.sh` deploys the new file like every other `scripts/*.py`; reinstall to get it.
+
 ## [10.9.0] — 2026-11-22
 
 **Upgrading:** run `bash install.sh`, then `cast rules sync --apply` so `~/.claude/rules/` picks up the rewritten
