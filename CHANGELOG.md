@@ -31,6 +31,12 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
   left the guard's wall-clock budgets uncontrolled, so a healthy guard failed them under heavy CPU load. The tripwire
   now counts CPU time (with a 60 s wall-clock net for real hangs), the review-gate tests pin the budgets except the
   ones that test them, and the perf tests start no real `git` processes. Test-only; the guard is unchanged.
+- **The review gate said "no matching code-reviewer approval" when the real problem was elsewhere.** When the gate ran
+  out of time under load, could not verify the commit command's shape, or could not read git or its database, the BLOCK
+  still told you to run `code-reviewer`. The message now names the actual cause and its remedy (retry, use the
+  documented commit shape, or the gate error). A real reviewer block or missing review is always named first, with the
+  unchanged message. Reasons and errors in the message are stripped of control characters. Every commit the gate
+  blocked before is still blocked; only the text changed.
 
 ## [10.9.0] — 2026-11-22
 

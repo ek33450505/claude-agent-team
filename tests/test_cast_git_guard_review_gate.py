@@ -792,5 +792,123 @@ class TestDocumentedShapes(GuardGateCase):
         self.assertEqual(self.ev('CAST_COMMIT_AGENT=1 CAST_UNREVIEWED_OK=docs git commit -F msg.txt')[0], 0)
 
 
+class TestBlockMessageByCause(GuardGateCase):
+    """Message text only: the gate's decisions are unchanged (see the enforce-mode tests)."""
+    NO_REVIEW = 'no matching code-reviewer approval'
+
+    def _ev(self, results, error=None):
+        return {'results': results, 'error': error}
+
+    def _msg(self, ev):
+        return guard._review_gate_block_message(ev, guard._review_gate_module())
+
+    def test_budget_error_says_timeout_not_missing_review(self):
+        msg = self._msg(self._ev([('a.txt', 'unreviewed', 'budget')], error='budget'))
+        self.assertIn('ran out of time', msg)
+        self.assertIn('retry', msg.lower())
+        self.assertIn('CAST_UNREVIEWED_OK=<reason>', msg)
+        self.assertNotIn(self.NO_REVIEW, msg)
+
+    def test_synthetic_budget_says_timeout_not_missing_review(self):
+        ev = guard._review_gate_synthetic('budget')
+        ev['error'] = 'budget'
+        msg = self._msg(ev)
+        self.assertIn('ran out of time', msg)
+        self.assertNotIn(self.NO_REVIEW, msg)
+
+    def test_unverifiable_command_names_reason_and_shape(self):
+        msg = self._msg(guard._review_gate_synthetic('unverifiable-command:pipeline'))
+        self.assertIn('pipeline', msg)
+        self.assertIn('documented commit shape', msg)
+        self.assertIn('CAST_UNREVIEWED_OK=<reason>', msg)
+        self.assertNotIn(self.NO_REVIEW, msg)
+
+    def test_gate_error_without_result_names_error(self):
+        msg = self._msg(self._ev([], error='db-unavailable'))
+        self.assertIn('db-unavailable', msg)
+        self.assertIn('could not read its inputs', msg)
+        self.assertNotIn(self.NO_REVIEW, msg)
+
+    def test_genuine_missing_review_message_is_unchanged(self):
+        mod = guard._review_gate_module()
+        msg = self._msg(self._ev([('a.txt', 'unreviewed', 'no-approval')]))
+        expected = (
+            'BLOCKED by the content-bound review gate: staged content has no matching code-reviewer '
+            f'approval. First: {mod._display("a.txt")} (unreviewed: no-approval).\n'
+            'Remedies: run code-reviewer on the staged content; or use the documented commit shape '
+            '(CAST_COMMIT_AGENT=1 git [-C <repo-root>] commit -F <msg-file> as the FIRST command, '
+            'nothing chained before it); or for docs-only or release-stamp commits add '
+            'CAST_UNREVIEWED_OK=<reason> after CAST_COMMIT_AGENT=1.'
+        )
+        self.assertEqual(msg, expected)
+
+    def _old_text(self, where):
+        return (
+            'BLOCKED by the content-bound review gate: staged content has no matching code-reviewer '
+            f'approval. First: {where}.\n'
+            'Remedies: run code-reviewer on the staged content; or use the documented commit shape '
+            '(CAST_COMMIT_AGENT=1 git [-C <repo-root>] commit -F <msg-file> as the FIRST command, '
+            'nothing chained before it); or for docs-only or release-stamp commits add '
+            'CAST_UNREVIEWED_OK=<reason> after CAST_COMMIT_AGENT=1.'
+        )
+
+    def test_real_block_not_masked_by_budget_row(self):
+        msg = self._msg(self._ev([('a.txt', 'blocked', 'recorded-block'),
+                                  ('b.txt', 'unreviewed', 'budget')], error='budget'))
+        self.assertEqual(msg, self._old_text('a.txt (blocked: recorded-block)'))
+
+    def test_missing_review_not_masked_by_budget_row(self):
+        msg = self._msg(self._ev([('b.txt', 'unreviewed', 'budget'),
+                                  ('a.txt', 'unreviewed', 'no-approval')], error='budget'))
+        self.assertEqual(msg, self._old_text('a.txt (unreviewed: no-approval)'))
+
+    def test_budget_only_multi_file_says_timeout(self):
+        msg = self._msg(self._ev([('a.txt', 'unreviewed', 'budget'),
+                                  ('b.txt', 'unreviewed', 'budget')], error='budget'))
+        self.assertIn('ran out of time', msg)
+        self.assertNotIn(self.NO_REVIEW, msg)
+
+    def test_unverifiable_reason_is_sanitized(self):
+        msg = self._msg(guard._review_gate_synthetic('unverifiable-command:option:\x1b[31mevil\r'))
+        self.assertNotIn('\x1b', msg)
+        self.assertNotIn('\r', msg)
+        self.assertIn('evil', msg)
+
+    def test_budget_only_rows_with_no_error_say_timeout(self):
+        msg = self._msg(self._ev([('a.txt', 'unreviewed', 'budget')], error=None))
+        self.assertIn('ran out of time', msg)
+        self.assertNotIn('also reported', msg)
+        self.assertNotIn(self.NO_REVIEW, msg)
+
+    def test_first_real_row_wins_over_later_unverifiable_and_budget(self):
+        msg = self._msg(self._ev([('a.txt', 'blocked', 'recorded-block'),
+                                  ('*', 'unreviewed', 'unverifiable-command:pipeline'),
+                                  ('b.txt', 'unreviewed', 'budget')], error='budget'))
+        self.assertEqual(msg, self._old_text('a.txt (blocked: recorded-block)'))
+
+    def test_budget_rows_plus_gate_error_names_the_error(self):
+        msg = self._msg(self._ev([('a.txt', 'unreviewed', 'budget')], error='db-unavailable'))
+        self.assertIn('ran out of time', msg)
+        self.assertIn('The gate also reported: db-unavailable.', msg)
+        self.assertNotIn(self.NO_REVIEW, msg)
+
+    def test_no_rows_and_no_error_says_unknown(self):
+        msg = self._msg(self._ev([], error=None))
+        self.assertEqual(msg, self._old_text('gate error: unknown'))
+
+    def test_gate_error_branch_is_sanitized(self):
+        msg = self._msg(self._ev([], error='odd\x1b[31m\r'))
+        self.assertNotIn('\x1b', msg)
+        self.assertNotIn('\r', msg)
+        self.assertIn('odd?[31m?', msg)
+
+    def test_timeout_also_clause_is_sanitized(self):
+        msg = self._msg(self._ev([('a.txt', 'unreviewed', 'budget')],
+                                 error='db-unavailable\x1b[31m\r'))
+        self.assertNotIn('\x1b', msg)
+        self.assertNotIn('\r', msg)
+        self.assertIn('db-unavailable?[31m?', msg)
+
+
 if __name__ == '__main__':
     unittest.main()
