@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.9.1] — 2026-11-22
+
 ### Security
 - **Session-start resume injection could pick up another repo's handoff.** `cast-resume-inject-hook.sh` matched
   hand-written handoffs by filename prefix, so a repo named `cast` (or a clone named after the prefix of a real repo)
